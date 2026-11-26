@@ -8,6 +8,12 @@ namespace ScreenStudio
 {
     internal static class ScrollCaptureSession
     {
+        internal static void CancelActive()
+        {
+            foreach (Form form in Application.OpenForms)
+                if (form is ScrollPanel) { form.Close(); return; }
+        }
+
         internal static async Task<Bitmap> CaptureAsync(Rectangle region, bool includeCursor)
         {
             if (region.Width < 16 || region.Height < 32)

@@ -19,7 +19,8 @@ namespace ScreenStudio
         private float zoom = 1;
         private Point contentOrigin;
         private readonly StudioButton photoTab, videoTab, whole, area, scroll, pointer, microphone, attachment, action, retry;
-        private readonly NotifyIcon tray;
+        private const string IdleTrayStatus = "取景台 · 单击打开，悬停可退出";
+        private readonly TrayIcon tray;
         private readonly ContextMenuStrip trayMenu;
         private readonly Timer clock = new Timer();
         private readonly Timer dismissCopyNotice = new Timer();
@@ -31,7 +32,7 @@ namespace ScreenStudio
         private bool useAttachment = ReadPreference("ChatAttachment"), recordAsAttachment, pendingAsAttachment;
         private bool useMicrophone = ReadPreference("RecordMicrophone"), recordWithMicrophone;
         private bool keysStarted, photoRegistered, videoRegistered, capturing, changingRecording, stoppingSoon, closing;
-        private bool showingCaptureHint;
+        private bool showingCaptureHint, hiddenToTray, exitRequested;
         private ShortcutFallback fallback;
         private bool PhotoAvailable { get { return photoRegistered || (fallback != null && fallback.Installed); } }
         private bool VideoAvailable { get { return videoRegistered || (fallback != null && fallback.Installed); } }
@@ -100,12 +101,18 @@ namespace ScreenStudio
             retry.Visible = false;
 
             trayMenu = new ContextMenuStrip();
-            trayMenu.Items.Add("停止录屏并复制", null, delegate { RequestRecordingStop(); });
-            tray = new NotifyIcon { Icon = appIcon, Text = "取景台", ContextMenuStrip = trayMenu };
-            tray.MouseClick += delegate(object sender, MouseEventArgs e)
+            ToolStripItem openItem = trayMenu.Items.Add("打开取景台", null, delegate { OpenFromTray(); });
+            ToolStripItem stopItem = trayMenu.Items.Add("停止录屏并复制", null, delegate { RequestRecordingStop(); });
+            ToolStripItem exitItem = trayMenu.Items.Add("退出取景台", null, delegate { RequestTrayExit(); });
+            trayMenu.Opening += delegate
             {
-                if (e.Button == MouseButtons.Left) RequestRecordingStop();
+                openItem.Enabled = !capturing && recorder == null && !changingRecording && !exitRequested;
+                stopItem.Available = recorder != null || changingRecording;
+                exitItem.Text = TrayExitCaption();
             };
+            tray = new TrayIcon(appIcon, trayMenu, delegate {
+                if (recorder != null || changingRecording) RequestRecordingStop(); else OpenFromTray();
+            }, RequestTrayExit, TrayExitCaption);
             recordingPanel = new RecordingPanel(RequestRecordingStop);
             dismissCopyNotice.Interval = 2300;
             dismissCopyNotice.Tick += delegate { DismissCopyNotice(); };
@@ -114,7 +121,7 @@ namespace ScreenStudio
             clock.Interval = 250;
             clock.Tick += delegate
             {
-                tray.Text = "取景台 · " + (recordWithMicrophone ? "录屏及麦克风" : "无声录屏") + " " + Duration(elapsed.Elapsed) + " · 单击停止";
+                tray.SetStatus("取景台 · " + (recordWithMicrophone ? "录屏及麦克风" : "无声录屏") + " " + Duration(elapsed.Elapsed) + " · 单击停止");
                 recordingPanel.UpdateElapsed(elapsed.Elapsed);
                 if (Visible) Invalidate();
             };
@@ -133,6 +140,7 @@ namespace ScreenStudio
         protected override void OnShown(EventArgs e)
         {
             base.OnShown(e);
+            tray.Start(IdleTrayStatus);
             FitToDisplay(GetDpiForWindow(Handle), Screen.FromHandle(Handle).WorkingArea, Bounds);
             keysStarted = true;
             RegisterKeys();
@@ -229,11 +237,7 @@ namespace ScreenStudio
             }
             if (m.Msg == Program.ActivateMessage && !closing)
             {
-                if (recorder == null && !capturing && !changingRecording)
-                {
-                    if (WindowState == FormWindowState.Minimized) ShowWindow(Handle, 9); // SW_RESTORE
-                    RestoreWindow(WindowState);
-                }
+                OpenFromTray();
                 return;
             }
             if (m.Msg == 0x02E0 && photoTab != null)
@@ -406,7 +410,9 @@ namespace ScreenStudio
 
         private void RunMode(bool video)
         {
-            if (closing) return;
+            if (closing || exitRequested) return;
+            tray.Dismiss();
+            if (trayMenu.Visible) trayMenu.Close();
             if (video && (recorder != null || changingRecording))
             {
                 RequestRecordingStop();
@@ -458,7 +464,7 @@ namespace ScreenStudio
                 captureGuide.SetTakingPhoto(true);
                 Hide();
                 await Task.Delay(160);
-                if (closing) return;
+                if (closing || exitRequested) return;
                 DwmFlush();
                 Bitmap image;
                 bool scrolling = photoRegion && scrollPhoto;
@@ -481,7 +487,7 @@ namespace ScreenStudio
                 else image = ScreenCapture.Grab(captureBounds, includePointer);
                 using (Bitmap original = image)
                 {
-                    if (closing || original == null) return;
+                    if (closing || exitRequested || original == null) return;
                     Bitmap edited = AnnotationEditor.Edit(original, null, scrolling, captureBounds);
                     if (edited == null) return;
                     ClearPending();
@@ -498,6 +504,7 @@ namespace ScreenStudio
                 if (!closing && recorder == null && !changingRecording)
                     RestoreWindow(duringRecording ? stateBeforeRecording : stateBeforePhoto,
                                   duringRecording ? returnAfterRecording : previousWindow);
+                FinishTrayExitWhenReady();
             }
         }
 
@@ -518,7 +525,7 @@ namespace ScreenStudio
                 if (videoRegion)
                 {
                     await Task.Delay(160);
-                    if (closing) return;
+                    if (closing || exitRequested) return;
                     DwmFlush();
                     Rectangle? picked = RegionPicker.Pick();
                     if (!picked.HasValue) return;
@@ -526,8 +533,7 @@ namespace ScreenStudio
                 }
                 captureGuide.SetRecording(region, videoRegion);
                 bool panelDuringCapture = recordingPanel.TryShowFor(region, recordWithMicrophone);
-                tray.Text = "取景台 · 正在准备录屏";
-                tray.Visible = true;
+                tray.SetStatus("取景台 · 正在准备录屏");
                 if (!panelDuringCapture)
                 {
                     // This display cannot exclude the panel. Show the acknowledgement before recording its first frame.
@@ -536,7 +542,7 @@ namespace ScreenStudio
                     recordingPanel.Hide();
                 }
                 else await Task.Delay(100);
-                if (closing) return;
+                if (closing || exitRequested) { captureGuide.SetRecording(null); return; }
                 DwmFlush();
                 VideoRecorder current = new VideoRecorder(region, FrameRate, includePointer, recordWithMicrophone);
                 recorder = current;
@@ -557,9 +563,9 @@ namespace ScreenStudio
                 if (closing || recorder != current) return;
                 elapsed.Restart();
                 recordingPanel.UpdateElapsed(TimeSpan.Zero);
-                tray.Text = "取景台 · " + (recordWithMicrophone ? "正在录制麦克风" : "无声录屏") + " · 按 F2 停止";
+                tray.SetStatus("取景台 · " + (recordWithMicrophone ? "正在录制麦克风" : "无声录屏") + " · 按 F2 停止");
                 if (!panelDuringCapture)
-                    tray.ShowBalloonTip(1800, "已开始录屏", "再次按 F2 或单击取景台托盘图标停止。", ToolTipIcon.Info);
+                    tray.ShowRecordingNotice();
                 clock.Start();
             }
             catch (Exception ex)
@@ -567,7 +573,6 @@ namespace ScreenStudio
                 captureGuide.SetRecording(null);
                 if (recorder != null) { recorder.Dispose(); recorder = null; }
                 recordingPanel.Hide();
-                tray.Visible = false;
                 ShowError("无法开始录屏", ex);
             }
             finally
@@ -575,11 +580,12 @@ namespace ScreenStudio
                 changingRecording = false;
                 if (!closing && recorder == null)
                 {
-                    tray.Visible = false;
+                    tray.SetStatus(IdleTrayStatus);
                     recordingPanel.Hide();
                     RestoreWindow(stateBeforeRecording, returnAfterRecording);
                 }
                 if (!closing && recorder != null && stoppingSoon) EndRecording();
+                FinishTrayExitWhenReady();
             }
         }
 
@@ -591,7 +597,7 @@ namespace ScreenStudio
             clock.Stop();
             elapsed.Stop();
             recordingPanel.ShowFinishing();
-            tray.Text = "取景台 · 正在复制录屏";
+            tray.SetStatus("取景台 · 正在复制录屏");
             try
             {
                 byte[] bytes;
@@ -613,9 +619,10 @@ namespace ScreenStudio
                 current.Dispose();
                 recorder = null;
                 changingRecording = false;
-                tray.Visible = false;
+                tray.SetStatus(IdleTrayStatus);
                 if (!dismissCopyNotice.Enabled) recordingPanel.Hide();
                 if (!closing && !capturing) RestoreWindow(stateBeforeRecording, returnAfterRecording);
+                FinishTrayExitWhenReady();
             }
         }
 
@@ -725,19 +732,77 @@ namespace ScreenStudio
 
         private void RestoreWindow(FormWindowState state, IntPtr previousWindow = default(IntPtr))
         {
-            if (WindowState != state) WindowState = state;
-            if (!Visible) Show();
-            if (previousWindow != IntPtr.Zero && previousWindow != Handle && IsWindowVisible(previousWindow))
-                SetForegroundWindow(previousWindow);
-            else if (state != FormWindowState.Minimized) Activate();
+            if (exitRequested) return;
+            if (!hiddenToTray)
+            {
+                if (WindowState != state) WindowState = state;
+                if (!Visible) Show();
+                if (previousWindow != IntPtr.Zero && previousWindow != Handle && IsWindowVisible(previousWindow))
+                    SetForegroundWindow(previousWindow);
+                else if (state != FormWindowState.Minimized) Activate();
+            }
             if (!PhotoAvailable || !VideoAvailable) RegisterKeys();
             RefreshState();
         }
 
+        private void OpenFromTray()
+        {
+            if (closing || exitRequested || capturing || changingRecording || recorder != null) return;
+            tray.Dismiss();
+            hiddenToTray = false;
+            if (WindowState == FormWindowState.Minimized) ShowWindow(Handle, 9); // SW_RESTORE
+            RestoreWindow(WindowState);
+        }
+
+        private string TrayExitCaption()
+        {
+            if (capturing) return "取消截图并退出";
+            return recorder != null || changingRecording ? "结束录屏并退出" : "退出取景台";
+        }
+
+        private void RequestTrayExit()
+        {
+            if (closing || exitRequested) return;
+            exitRequested = true;
+            if (capturing || changingRecording)
+            {
+                // The picker and annotation editor are modal. The scroll controller is modeless.
+                foreach (Form form in Application.OpenForms)
+                    if (form.Modal) { form.DialogResult = DialogResult.Cancel; break; }
+                if (capturing) ScrollCaptureSession.CancelActive();
+            }
+            if (recorder != null || changingRecording) RequestRecordingStop();
+            FinishTrayExitWhenReady();
+        }
+
+        private void FinishTrayExitWhenReady()
+        {
+            if (!exitRequested || closing || capturing || changingRecording || recorder != null) return;
+            // Let the tray's click/notification handler return before disposing its window.
+            BeginInvoke((Action)delegate { if (exitRequested && !closing) Close(); });
+        }
+
         protected override void OnFormClosing(FormClosingEventArgs e)
         {
-            // A close during asynchronous finalization must not discard the last captured frame.
-            if (changingRecording && e.CloseReason == CloseReason.UserClosing) { e.Cancel = true; return; }
+            if (e.CloseReason == CloseReason.UserClosing)
+            {
+                if (!exitRequested)
+                {
+                    e.Cancel = true;
+                    hiddenToTray = true;
+                    tray.Dismiss();
+                    Hide();
+                    return;
+                }
+                if (capturing || changingRecording || recorder != null) { e.Cancel = true; return; }
+                if ((pendingVideo != null || pendingImage != null) && !PublishPending())
+                {
+                    e.Cancel = true;
+                    exitRequested = false;
+                    OpenFromTray();
+                    return;
+                }
+            }
             closing = true;
             clock.Stop();
             if (recorder != null)
@@ -752,7 +817,9 @@ namespace ScreenStudio
                 if (e.CloseReason == CloseReason.UserClosing)
                 {
                     closing = false;
+                    exitRequested = false;
                     e.Cancel = true;
+                    OpenFromTray();
                     ShowError("剪贴板正在使用", ex);
                     return;
                 }
@@ -771,7 +838,7 @@ namespace ScreenStudio
                 captureGuide.Dispose();
                 if (pendingAttachmentPath != null) VideoAttachmentStore.RemoveUnpublished(pendingAttachmentPath);
                 if (recordingPanel != null) recordingPanel.Dispose();
-                if (tray != null) { tray.Visible = false; tray.Dispose(); }
+                if (tray != null) tray.Dispose();
                 if (trayMenu != null) trayMenu.Dispose();
                 if (pendingImage != null) pendingImage.Dispose();
                 if (appIcon != null) appIcon.Dispose();
