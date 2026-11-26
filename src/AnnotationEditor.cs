@@ -26,9 +26,6 @@ namespace ScreenStudio
                 return answer == DialogResult.OK ? dialog.Canvas.RenderOriginalSize() : null;
             }
         }
-        private static readonly Color Jade = Color.FromArgb(5, 103, 80);
-        private static readonly Color Paper = Color.FromArgb(246, 248, 246);
-        private static readonly Color Ink = Color.FromArgb(30, 47, 41);
         private static readonly Color MarkRed = Color.FromArgb(224, 33, 47);
         private enum Tool { Select, Box, Arrow, Text }
 
@@ -41,8 +38,8 @@ namespace ScreenStudio
             {
                 Text = "截图标注";
                 Font = new Font("Microsoft YaHei UI", 9F);
-                BackColor = Paper;
-                ForeColor = Ink;
+                BackColor = Art.Paper;
+                ForeColor = Art.Ink;
                 StartPosition = FormStartPosition.Manual;
                 ShowInTaskbar = true;
                 TopMost = true;
@@ -60,7 +57,7 @@ namespace ScreenStudio
                 var toolbar = new FlowLayoutPanel {
                     Dock = DockStyle.Fill, Padding = new Padding((int)(10 * dpi), (int)(6 * dpi), 0, (int)(6 * dpi)),
                     AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, WrapContents = true,
-                    Margin = Padding.Empty, BackColor = Paper
+                    Margin = Padding.Empty, BackColor = Art.Paper
                 };
                 selectButton = CreateButton("选择", dpi, delegate { SelectMode(Tool.Select); });
                 boxButton = CreateButton("红色方框", dpi, delegate { SelectMode(Tool.Box); });
@@ -68,14 +65,14 @@ namespace ScreenStudio
                 textButton = CreateButton("红色文字", dpi, delegate { SelectMode(Tool.Text); });
                 undoButton = CreateButton("撤销", dpi, delegate { Canvas.Undo(); });
                 Button copy = CreateButton("复制到剪贴板", dpi, delegate { Confirm(); });
-                copy.BackColor = Jade;
-                copy.ForeColor = Color.White;
-                copy.FlatAppearance.BorderColor = Jade;
+                copy.BackColor = Art.Pink;
+                copy.ForeColor = Art.Ink;
+                copy.FlatAppearance.BorderColor = Art.Berry;
                 Button cancel = CreateButton("取消", dpi, delegate { DialogResult = DialogResult.Cancel; });
                 toolbar.Controls.AddRange(new Control[] { selectButton, boxButton, arrowButton, textButton, undoButton, copy, cancel });
                 var status = new Label {
                     AutoSize = true, Padding = new Padding((int)(12 * dpi), (int)(6 * dpi), (int)(8 * dpi), (int)(6 * dpi)),
-                    ForeColor = Color.FromArgb(68, 87, 79), TextAlign = ContentAlignment.MiddleLeft, Margin = Padding.Empty
+                    ForeColor = Art.Muted, TextAlign = ContentAlignment.MiddleLeft, Margin = Padding.Empty
                 };
                 var layout = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 3, Margin = Padding.Empty, Padding = Padding.Empty };
                 layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
@@ -93,7 +90,7 @@ namespace ScreenStudio
                     SetActive(arrowButton, Canvas.ActiveTool == Tool.Arrow);
                     SetActive(textButton, Canvas.ActiveTool == Tool.Text);
                     string hint;
-                    if (Canvas.EditingText) hint = "Shift + Enter 换行，Esc 取消本次文字编辑";
+                    if (Canvas.EditingText) hint = "文字笔画随滚轮向上变粗、向下变细　·　Shift + Enter 换行　·　Esc 取消";
                     else if (Canvas.SelectionKind == ShapeKind.Box) hint = "拖动方框移动，拖动四角调整大小";
                     else if (Canvas.SelectionKind == ShapeKind.Arrow) hint = "拖动箭身移动，拖动两端调整方向和长度";
                     else if (Canvas.SelectionKind == ShapeKind.Text) hint = "拖动文字移动，双击修改内容";
@@ -104,8 +101,9 @@ namespace ScreenStudio
                         case Tool.Text: hint = "单击输入文字，Shift + Enter 换行"; break;
                         default: hint = "拖动绘制方框"; break;
                     }
-                    status.Text = original.Width + " × " + original.Height + " 像素　·　" + hint +
-                        (longImage ? "　·　滚轮浏览" : "") + "　·　Enter 复制";
+                    string wheel = Canvas.EditingText ? "" : "指向标注，滚轮向上加粗、向下变细　·　";
+                    status.Text = wheel + hint + (longImage ? "　·　空白处滚轮浏览" : "") +
+                        "　·　Enter 复制　·　" + original.Width + " × " + original.Height + " 像素";
                 };
                 SelectMode(Tool.Box);
                 Shown += delegate {
@@ -125,20 +123,20 @@ namespace ScreenStudio
                 var b = new Button {
                     Text = label, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink,
                     FlatStyle = FlatStyle.Flat, UseVisualStyleBackColor = false,
-                    BackColor = Color.White, ForeColor = Ink,
+                    BackColor = Color.White, ForeColor = Art.Ink,
                     Padding = new Padding((int)(7 * dpi), (int)(3 * dpi), (int)(7 * dpi), (int)(3 * dpi)),
                     MinimumSize = new Size(0, (int)(32 * dpi)), Margin = new Padding(0, 0, (int)(6 * dpi), 0)
                 };
-                b.FlatAppearance.BorderColor = Color.FromArgb(196, 210, 202);
+                b.FlatAppearance.BorderColor = Art.Line;
                 b.Click += click;
                 return b;
             }
 
             private static void SetActive(Button b, bool active)
             {
-                b.BackColor = active ? Color.FromArgb(218, 239, 227) : Color.White;
-                b.ForeColor = active ? Jade : Ink;
-                b.FlatAppearance.BorderColor = active ? Jade : Color.FromArgb(196, 210, 202);
+                b.BackColor = active ? Art.Lilac : Color.White;
+                b.ForeColor = active ? Art.Violet : Art.Ink;
+                b.FlatAppearance.BorderColor = active ? Art.Violet : Art.Line;
             }
 
             private void SelectMode(Tool mode)

@@ -8,8 +8,8 @@ namespace ScreenStudio
 {
     public sealed class RegionPicker : Form
     {
-        private static readonly Color Accent = Color.FromArgb(124, 238, 215);
-        private static readonly Color LabelFill = Color.FromArgb(26, 34, 43);
+        private static readonly Color Accent = Art.Pink;
+        private static readonly Color LabelFill = Art.Ink;
         private readonly Rectangle desktop;
         private readonly Bitmap snapshot;
         private readonly Rectangle hintMonitor;

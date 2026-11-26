@@ -27,15 +27,18 @@ namespace ScreenStudio
             private readonly VScrollBar pageScroll;
             private bool needsScroll;
             private int wheelRemainder;
+            private object wheelTarget;
             private readonly List<AnnotationShape> shapes = new List<AnnotationShape>();
             private readonly Stack<Change> history = new Stack<Change>();
             private readonly float strokeWidth;
-            private readonly Font captionFont;
+            // Use bold metrics for layout in every weight so a stationary caption keeps its selection and edge clearance.
+            private readonly Font lightCaptionFont, captionFont, boldCaptionFont;
             private readonly StringFormat captionFormat;
             private CaptionInput input;
             private Font inputFont;
             private int selected = -1, editing = -1, dragged = -1;
             private PointF textAnchor, pressPoint, fixedCorner;
+            private int inputThickness;
             private Point pressClient;
             private Grip dragGrip;
             private AnnotationShape preview;
@@ -64,10 +67,21 @@ namespace ScreenStudio
                 SetStyle(ControlStyles.ResizeRedraw | ControlStyles.Selectable | ControlStyles.StandardDoubleClick, true);
                 TabStop = true;
                 Margin = Padding.Empty;
-                BackColor = Color.FromArgb(42, 53, 49);
+                BackColor = Color.FromArgb(52, 46, 55);
                 float scale = Math.Min(2.7F, Math.Max(.75F, longImage ? source.Width / 1500F : source.Height / 1080F));
                 strokeWidth = Math.Max(2F, 3F * scale);
-                captionFont = new Font("Microsoft YaHei UI", 25 * scale, FontStyle.Bold, GraphicsUnit.Pixel);
+                float captionSize = 25 * scale;
+                captionFont = new Font("Microsoft YaHei UI", captionSize, FontStyle.Regular, GraphicsUnit.Pixel);
+                lightCaptionFont = new Font("Microsoft YaHei UI Light", captionSize, FontStyle.Regular, GraphicsUnit.Pixel);
+                if (!String.Equals(lightCaptionFont.FontFamily.GetName(1033), "Microsoft YaHei UI Light", StringComparison.OrdinalIgnoreCase))
+                {
+                    // Windows without the optional Chinese fonts still has the Segoe UI family.
+                    lightCaptionFont.Dispose();
+                    captionFont.Dispose();
+                    captionFont = new Font("Segoe UI", captionSize, FontStyle.Regular, GraphicsUnit.Pixel);
+                    lightCaptionFont = new Font("Segoe UI Light", captionSize, FontStyle.Regular, GraphicsUnit.Pixel);
+                }
+                boldCaptionFont = new Font(captionFont, FontStyle.Bold);
                 captionFormat = (StringFormat)StringFormat.GenericTypographic.Clone();
                 captionFormat.FormatFlags |= StringFormatFlags.NoWrap;
                 Cursor = Cursors.Cross;
@@ -82,6 +96,12 @@ namespace ScreenStudio
             }
 
             private float Inset { get { return Math.Min(14F, Math.Max(0, Math.Min(ClientSize.Width, ClientSize.Height) / 10F)); } }
+            private Font CaptionFont(int thickness)
+            {
+                if (thickness < 0) return lightCaptionFont;
+                return thickness > 0 ? boldCaptionFont : captionFont;
+            }
+
             private float LongImageScale(int width) { return Math.Min(1F, Math.Max(1F, width - 2 * Inset) / original.Width); }
 
             private void UpdateScrollRange()
@@ -203,6 +223,7 @@ namespace ScreenStudio
             private void OpenInput(PointF point, int index)
             {
                 textAnchor = point;
+                inputThickness = index < 0 ? 0 : shapes[index].Thickness;
                 editing = selected = index;
                 input = new CaptionInput {
                     Multiline = true, AcceptsReturn = true, WordWrap = false,
@@ -212,6 +233,10 @@ namespace ScreenStudio
                 };
                 Controls.Add(input);
                 input.TextChanged += delegate { PlaceInput(); };
+                input.MouseWheel += delegate(object sender, MouseEventArgs e) {
+                    Point client = PointToClient(((Control)sender).PointToScreen(e.Location));
+                    HandleWheel(client, e);
+                };
                 PlaceInput();
                 input.BringToFront();
                 input.Focus();
@@ -224,11 +249,13 @@ namespace ScreenStudio
                 if (input == null) return;
                 RectangleF frame = Frame;
                 float scale = frame.Width / original.Width;
-                float size = Math.Max(12F, captionFont.Size * scale);
-                if (inputFont == null || Math.Abs(inputFont.Size - size) > .2F)
+                Font face = CaptionFont(inputThickness);
+                float size = Math.Max(12F, face.Size * scale);
+                if (inputFont == null || Math.Abs(inputFont.Size - size) > .2F ||
+                    inputFont.Name != face.Name || inputFont.Style != face.Style)
                 {
                     Font previous = inputFont;
-                    inputFont = new Font(captionFont.FontFamily, size, captionFont.Style, GraphicsUnit.Pixel);
+                    inputFont = new Font(face.FontFamily, size, face.Style, GraphicsUnit.Pixel);
                     input.Font = inputFont;
                     if (previous != null) previous.Dispose();
                 }
@@ -260,14 +287,17 @@ namespace ScreenStudio
                 {
                     if (index >= 0) ApplyChange(index, null);
                 }
-                else if (index < 0 || shapes[index].Caption != value)
+                else if (index < 0 || shapes[index].Caption != value || shapes[index].Thickness != inputThickness)
                 {
-                    var shape = new AnnotationShape { Kind = ShapeKind.Text, Caption = value, A = textAnchor };
-                    using (Graphics g = CreateGraphics())
+                    var shape = new AnnotationShape { Kind = ShapeKind.Text, Caption = value, A = textAnchor, Thickness = inputThickness };
+                    if (index < 0 || shapes[index].Caption != value)
                     {
-                        RectangleF bounds = shape.Bounds(g, captionFont, captionFormat);
-                        shape.A = new PointF(Limit(textAnchor.X, 0, original.Width - bounds.Width - 1),
-                                             Limit(textAnchor.Y, 0, original.Height - bounds.Height - 1));
+                        using (Graphics g = CreateGraphics())
+                        {
+                            RectangleF bounds = shape.Bounds(g, boldCaptionFont, captionFormat);
+                            shape.A = new PointF(Limit(textAnchor.X, 0, original.Width - bounds.Width - 1),
+                                                 Limit(textAnchor.Y, 0, original.Height - bounds.Height - 1));
+                        }
                     }
                     ApplyChange(index < 0 ? shapes.Count : index, shape);
                 }
@@ -305,7 +335,7 @@ namespace ScreenStudio
             }
 
             // Returns the topmost painted mark first. In selection mode a box is also movable from inside.
-            private int Hit(PointF point, out Grip grip)
+            private int Hit(PointF point, out Grip grip, bool includeBoxInterior = false)
             {
                 grip = Grip.None;
                 float scale = Frame.Width / original.Width;
@@ -326,11 +356,11 @@ namespace ScreenStudio
                         if (grip != Grip.None) return selected;
                     }
                     for (int i = shapes.Count - 1; i >= 0; i--)
-                        if (shapes[i].HitTest(g, point, 3.5F * px, captionFont, captionFormat, strokeWidth))
+                        if (shapes[i].HitTest(g, point, 3.5F * px, boldCaptionFont, captionFormat, strokeWidth))
                         { grip = Grip.Body; return i; }
-                    if (ActiveTool == Tool.Select)
+                    if (ActiveTool == Tool.Select || includeBoxInterior)
                         for (int i = shapes.Count - 1; i >= 0; i--)
-                            if (shapes[i].Kind == ShapeKind.Box && shapes[i].Bounds(g, captionFont, captionFormat).Contains(point))
+                            if (shapes[i].Kind == ShapeKind.Box && shapes[i].Bounds(g, boldCaptionFont, captionFormat).Contains(point))
                             { grip = Grip.Body; return i; }
                 }
                 return -1;
@@ -386,7 +416,7 @@ namespace ScreenStudio
                 {
                     using (Graphics g = CreateGraphics())
                     {
-                        RectangleF bounds = before.Bounds(g, captionFont, captionFormat);
+                        RectangleF bounds = before.Bounds(g, boldCaptionFont, captionFormat);
                         dx = Limit(dx, -bounds.Left, original.Width - 1 - bounds.Right);
                         dy = Limit(dy, -bounds.Top, original.Height - 1 - bounds.Bottom);
                     }
@@ -449,7 +479,8 @@ namespace ScreenStudio
                         preview.B = bottomRight;
                     }
                     if (dragged < 0) ApplyChange(shapes.Count, preview);
-                    else if (moved && (shapes[dragged].A != preview.A || shapes[dragged].B != preview.B))
+                    else if (shapes[dragged].Thickness != preview.Thickness ||
+                             (moved && (shapes[dragged].A != preview.A || shapes[dragged].B != preview.B)))
                         ApplyChange(dragged, preview);
                 }
                 ClearDrag();
@@ -472,18 +503,79 @@ namespace ScreenStudio
             protected override void OnMouseWheel(MouseEventArgs e)
             {
                 base.OnMouseWheel(e);
-                if (!needsScroll || preview != null) return;
-                wheelRemainder += e.Delta;
-                int step = wheelRemainder / SystemInformation.MouseWheelScrollDelta;
-                if (step == 0) return;
-                wheelRemainder %= SystemInformation.MouseWheelScrollDelta;
-                CommitText();
-                int lines = SystemInformation.MouseWheelScrollLines;
-                int distance = lines < 0 ? pageScroll.LargeChange : pageScroll.SmallChange * lines;
-                int max = pageScroll.Maximum - pageScroll.LargeChange + 1;
-                pageScroll.Value = Math.Max(0, Math.Min(max, pageScroll.Value - step * distance));
+                HandleWheel(e.Location, e);
+            }
+
+            private void HandleWheel(Point client, MouseEventArgs e)
+            {
                 HandledMouseEventArgs handled = e as HandledMouseEventArgs;
+                if (handled != null && handled.Handled) return;
                 if (handled != null) handled.Handled = true;
+                if (Composing || e.Delta == 0) return;
+                if (preview != null)
+                {
+                    preview.Thickness = AnnotationShape.AdjustThickness(preview.Kind, preview.Thickness, WheelSteps(preview, e.Delta));
+                    Invalidate();
+                    return;
+                }
+
+                bool overInput = input != null && input.Bounds.Contains(client);
+                bool overFrame = ClientRectangle.Contains(client) && Frame.Contains(client);
+                PointF point = ImagePoint(client);
+                Grip grip;
+                int index = !overInput && overFrame ? Hit(point, out grip, true) : -1;
+                object target = overInput ? (Control)input : (needsScroll ? pageScroll : null);
+                if (index >= 0) target = shapes[index];
+                int steps = WheelSteps(target, e.Delta);
+                if (steps == 0) return;
+
+                if (!overInput && input != null)
+                {
+                    CommitText();
+                    // Committing an edited caption can change the target under the pointer.
+                    index = overFrame ? Hit(point, out grip, true) : -1;
+                }
+                if (!overInput && index < 0)
+                {
+                    if (needsScroll)
+                    {
+                        int lines = SystemInformation.MouseWheelScrollLines;
+                        long distance = lines < 0 ? pageScroll.LargeChange : (long)pageScroll.SmallChange * lines;
+                        int max = pageScroll.Maximum - pageScroll.LargeChange + 1;
+                        pageScroll.Value = (int)Math.Max(0, Math.Min(max, pageScroll.Value - steps * distance));
+                    }
+                    return;
+                }
+                if (overInput)
+                {
+                    inputThickness = AnnotationShape.AdjustThickness(ShapeKind.Text, inputThickness, steps);
+                    PlaceInput();
+                }
+                else
+                {
+                    AnnotationShape shape = shapes[index];
+                    int thickness = AnnotationShape.AdjustThickness(shape.Kind, shape.Thickness, steps);
+                    if (thickness == shape.Thickness) return;
+                    AnnotationShape next = shape.Clone();
+                    next.Thickness = thickness;
+                    ApplyChange(index, next);
+                    wheelTarget = next;
+                }
+                Notify();
+            }
+
+            private int WheelSteps(object target, int delta)
+            {
+                if (!Object.ReferenceEquals(wheelTarget, target))
+                {
+                    wheelRemainder = 0;
+                    wheelTarget = target;
+                }
+                if (target == null) return 0;
+                wheelRemainder += delta;
+                int steps = wheelRemainder / SystemInformation.MouseWheelScrollDelta;
+                wheelRemainder %= SystemInformation.MouseWheelScrollDelta;
+                return steps;
             }
 
             protected override void OnPaint(PaintEventArgs e)
@@ -509,13 +601,13 @@ namespace ScreenStudio
 
             private void PaintSelection(Graphics g, AnnotationShape shape, float px)
             {
-                using (var edge = new Pen(Jade, 1.35F * px))
+                using (var edge = new Pen(Art.Violet, 1.35F * px))
                 using (var white = new SolidBrush(Color.White))
                 {
                     if (shape.Kind == ShapeKind.Text)
                     {
                         edge.DashStyle = DashStyle.Dash;
-                        RectangleF bounds = shape.Bounds(g, captionFont, captionFormat);
+                        RectangleF bounds = shape.Bounds(g, boldCaptionFont, captionFormat);
                         bounds.Inflate(2 * px, 2 * px);
                         g.DrawRectangle(edge, bounds.X, bounds.Y, bounds.Width, bounds.Height);
                     }
@@ -541,9 +633,10 @@ namespace ScreenStudio
                     {
                         if (interactive && input != null && i == editing) continue;
                         AnnotationShape shape = interactive && i == dragged && preview != null ? preview : shapes[i];
-                        shape.Paint(g, pen, brush, captionFont, captionFormat);
+                        shape.Paint(g, pen, brush, CaptionFont(shape.Thickness), captionFormat);
                     }
-                    if (interactive && preview != null && dragged < 0) preview.Paint(g, pen, brush, captionFont, captionFormat);
+                    if (interactive && preview != null && dragged < 0)
+                        preview.Paint(g, pen, brush, CaptionFont(preview.Thickness), captionFormat);
                 }
             }
 
@@ -567,7 +660,9 @@ namespace ScreenStudio
                 if (disposing)
                 {
                     if (input != null) CloseInput();
+                    lightCaptionFont.Dispose();
                     captionFont.Dispose();
+                    boldCaptionFont.Dispose();
                     captionFormat.Dispose();
                 }
                 base.Dispose(disposing);

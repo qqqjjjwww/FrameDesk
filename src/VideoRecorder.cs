@@ -10,12 +10,13 @@ using System.Threading;
 
 namespace ScreenStudio
 {
-    /// <summary>Records one silent H.264 MP4. All encoder calls run on the same MTA thread.</summary>
-    public sealed class VideoRecorder : IDisposable
+    /// <summary>Records an H.264 MP4 with optional microphone audio on one MTA thread.</summary>
+    public sealed partial class VideoRecorder : IDisposable
     {
         private readonly Rectangle region;
         private readonly int fps;
         private readonly bool includeCursor;
+        private readonly bool includeMicrophone;
         private readonly object gate = new object();
         private readonly ManualResetEvent stop = new ManualResetEvent(false);
         private readonly ManualResetEvent ready = new ManualResetEvent(false);
@@ -26,14 +27,19 @@ namespace ScreenStudio
 
         // Raised asynchronously for a failure after Start returned successfully.
         public event Action<Exception> Failed;
+        internal MicrophoneException MicrophoneError { get; private set; }
 
         public VideoRecorder(Rectangle region, int fps, bool includeCursor)
+            : this(region, fps, includeCursor, false) { }
+
+        public VideoRecorder(Rectangle region, int fps, bool includeCursor, bool includeMicrophone)
         {
             if (region.Width < 1 || region.Height < 1) throw new ArgumentException("录制区域为空。", "region");
             if (fps < 1 || fps > 60) throw new ArgumentOutOfRangeException("fps");
             this.region = region;
             this.fps = fps;
             this.includeCursor = includeCursor;
+            this.includeMicrophone = includeMicrophone;
         }
 
         public void Start()
@@ -92,6 +98,7 @@ namespace ScreenStudio
             IntPtr byteStream = IntPtr.Zero;
             Mf.SinkWriter writer = null;
             Mf.Sample pending = null;
+            MicrophoneCapture microphone = null;
             try
             {
                 Mf.MFStartup(0x00020070, 0);
@@ -110,10 +117,18 @@ namespace ScreenStudio
                 // A non-null IMFByteStream selects the in-memory destination. The suffix only selects the muxer.
                 Mf.MFCreateSinkWriterFromURL("clipboard.mp4", byteStream, IntPtr.Zero, out writer);
                 Configure(writer, canvas, out stream);
+                AudioTrack audio = null;
+                if (includeMicrophone)
+                {
+                    microphone = new MicrophoneCapture();
+                    audio = new AudioTrack(writer);
+                }
                 writer.BeginWriting();
                 long period = TimeSpan.TicksPerSecond / fps;
                 pending = GrabSample(picture, canvas);
+                if (audio != null) audio.StartTimeline();
                 Stopwatch clock = Stopwatch.StartNew();
+                if (microphone != null) microphone.Start();
                 long last = 0;
                 long due = period;
                 started = true;
@@ -125,6 +140,21 @@ namespace ScreenStudio
                     bool ending = stop.WaitOne(wait);
                     long now = Math.Max(last + 1, clock.Elapsed.Ticks);
                     if (ending && last == 0) now = Math.Max(period, now);
+                    if (audio != null)
+                    {
+                        try
+                        {
+                            if (ending) microphone.Stop();
+                            audio.Drain(microphone, now, ending);
+                        }
+                        catch (MicrophoneException ex)
+                        {
+                            // Finish a playable recording with everything captured before disconnection.
+                            MicrophoneError = ex;
+                            ending = true;
+                        }
+                        if (ending) audio.Finish(now);
+                    }
                     pending.SetSampleTime(last);
                     pending.SetSampleDuration(now - last);
                     writer.WriteSample(stream, pending);
@@ -145,16 +175,18 @@ namespace ScreenStudio
             }
             finally
             {
+                if (microphone != null) microphone.Dispose();
                 Mf.Release(ref pending);
                 Mf.Release(ref writer);
                 if (byteStream != IntPtr.Zero) Marshal.Release(byteStream);
                 Mf.Release(ref memory);
                 if (mfStarted) Mf.MFShutdown();
                 if (!started) ready.Set();
-                if (started && failure != null)
+                Exception problem = failure ?? MicrophoneError;
+                if (started && problem != null)
                 {
                     Action<Exception> handler = Failed;
-                    if (handler != null) ThreadPool.QueueUserWorkItem(delegate { handler(failure); });
+                    if (handler != null) ThreadPool.QueueUserWorkItem(delegate { handler(problem); });
                 }
             }
         }

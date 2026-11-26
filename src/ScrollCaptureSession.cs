@@ -68,7 +68,7 @@ namespace ScreenStudio
                 TopMost = true;
                 DoubleBuffered = true;
                 BackColor = Art.Ink;
-                finish = MakeButton("完成", Art.Lime, delegate { End(true); });
+                finish = MakeButton("完成", Art.Iris, delegate { End(true); });
                 cancel = MakeButton("取消", Color.WhiteSmoke, delegate { End(false); });
                 sampling.Tick += OnSample;
             }
@@ -273,9 +273,9 @@ namespace ScreenStudio
                 Graphics g = e.Graphics;
                 Art.Init(g, zoom);
                 float available = ClientSize.Width / zoom - 235;
-                Art.Dot(g, stitcher.LimitReached || stitcher.Unmatched ? Color.Gold : Art.Lime, 12, 17, 8);
+                Art.Dot(g, stitcher.LimitReached || stitcher.Unmatched ? Color.Gold : Art.Mint, 12, 17, 8);
                 Art.Label(g, "滚动截图  ·  " + height + " px", 28, 6, available, 29, 15, Color.White, true, StringAlignment.Near);
-                Art.Label(g, status, 12, 32, available + 16, 24, 12, Color.FromArgb(219, 237, 225), false, StringAlignment.Near);
+                Art.Label(g, status, 12, 32, available + 16, 24, 12, Art.Lilac, false, StringAlignment.Near);
             }
 
             protected override void OnFormClosed(FormClosedEventArgs e)

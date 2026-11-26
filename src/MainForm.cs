@@ -17,22 +17,25 @@ namespace ScreenStudio
         private const int PhotoKey = 11, VideoKey = 12, FrameRate = 20;
         private const int DesignWidth = 656, DesignHeight = 537;
         private float zoom = 1;
-        private readonly StudioButton photoTab, videoTab, whole, area, scroll, pointer, attachment, action, retry;
+        private Point contentOrigin;
+        private readonly StudioButton photoTab, videoTab, whole, area, scroll, pointer, microphone, attachment, action, retry;
         private readonly NotifyIcon tray;
         private readonly ContextMenuStrip trayMenu;
         private readonly Timer clock = new Timer();
         private readonly Timer dismissCopyNotice = new Timer();
         private readonly Timer attachmentCleanup = new Timer();
+        private readonly CaptureRegionGuide captureGuide = new CaptureRegionGuide();
         private readonly RecordingPanel recordingPanel;
         private readonly Stopwatch elapsed = new Stopwatch();
         private bool videoMode, photoRegion = true, scrollPhoto, videoRegion, includePointer;
-        private bool useAttachment = ReadAttachmentPreference(), recordAsAttachment, pendingAsAttachment;
+        private bool useAttachment = ReadPreference("ChatAttachment"), recordAsAttachment, pendingAsAttachment;
+        private bool useMicrophone = ReadPreference("RecordMicrophone"), recordWithMicrophone;
         private bool keysStarted, photoRegistered, videoRegistered, capturing, changingRecording, stoppingSoon, closing;
         private bool showingCaptureHint;
         private ShortcutFallback fallback;
         private bool PhotoAvailable { get { return photoRegistered || (fallback != null && fallback.Installed); } }
         private bool VideoAvailable { get { return videoRegistered || (fallback != null && fallback.Installed); } }
-        private bool minimizedBeforeRecording, minimizedBeforePhoto;
+        private FormWindowState stateBeforeRecording;
         private IntPtr returnAfterRecording;
         private VideoRecorder recorder;
         private string clipState = "", notice = "";
@@ -40,6 +43,7 @@ namespace ScreenStudio
         private byte[] pendingVideo;
         private string pendingDetail, pendingName, pendingAttachmentPath;
         private readonly Icon appIcon;
+        private readonly Bitmap cameraSticker;
 
         internal MainForm()
         {
@@ -47,18 +51,24 @@ namespace ScreenStudio
             AccessibleName = "取景台 · 桌面截图与录屏";
             appIcon = Icon.ExtractAssociatedIcon(Application.ExecutablePath);
             Icon = appIcon;
+            using (Stream embedded = typeof(MainForm).Assembly.GetManifestResourceStream("ScreenStudio.CameraMascot.png"))
+            {
+                if (embedded != null)
+                    using (var image = new Bitmap(embedded)) cameraSticker = new Bitmap(image);
+            }
             AutoScaleMode = AutoScaleMode.None;
-            FormBorderStyle = FormBorderStyle.FixedSingle;
-            MaximizeBox = false;
+            FormBorderStyle = FormBorderStyle.Sizable;
+            MaximizeBox = true;
             StartPosition = FormStartPosition.CenterScreen;
             BackColor = Art.Paper;
             DoubleBuffered = true;
-            using (Graphics g = CreateGraphics()) zoom = g.DpiX / 96f;
+            using (Graphics g = CreateGraphics())
+                ClientSize = new Size((int)Math.Round(DesignWidth * g.DpiX / 96f),
+                                      (int)Math.Round(DesignHeight * g.DpiY / 96f));
 
             photoTab = Make(ButtonKind.Tab, "截图", "photo", delegate { SelectMode(false); });
             videoTab = Make(ButtonKind.Tab, "录屏", "video", delegate { SelectMode(true); });
             photoTab.Detail = "F1"; videoTab.Detail = "F2";
-            photoTab.Surface = videoTab.Surface = Art.Rail;
             whole = Make(ButtonKind.Scope, "全屏", "screen", delegate { SetRegion(false); });
             area = Make(ButtonKind.Scope, "框选区域", "region", delegate { SetRegion(true); });
             scroll = Make(ButtonKind.Scope, "滚动截图", "scroll", delegate { SetRegion(true, true); });
@@ -66,16 +76,27 @@ namespace ScreenStudio
             area.Detail = "可跨屏框选";
             scroll.Detail = "向下滚动拼接";
             whole.Surface = area.Surface = scroll.Surface = Color.White;
-            pointer = Make(ButtonKind.Switch, "显示鼠标指针", "",
+            pointer = Make(ButtonKind.Switch, "显示鼠标指针", "cursor",
                 delegate { includePointer = !includePointer; RefreshState(); });
             pointer.Surface = Color.White;
-            attachment = Make(ButtonKind.Switch, "聊天附件（临时 MP4）", "", ToggleAttachment);
-            attachment.Surface = Color.White;
+            microphone = Make(ButtonKind.Switch, "录制麦克风", "microphone", delegate {
+                if (recorder != null || changingRecording) return;
+                useMicrophone = !useMicrophone;
+                SavePreference("RecordMicrophone", useMicrophone);
+                RefreshState();
+            });
+            attachment = Make(ButtonKind.Switch, "聊天附件（临时 MP4）", "clip", delegate {
+                useAttachment = !useAttachment;
+                SavePreference("ChatAttachment", useAttachment);
+                RefreshState();
+            });
+            microphone.Surface = attachment.Surface = Color.White;
             action = Make(ButtonKind.Primary, "", "photo", delegate { RunMode(videoMode); });
             retry = Make(ButtonKind.Link, "重试复制", "", async delegate
             {
                 if (pendingVideo != null) await PublishVideoAsync(); else PublishPending();
             });
+            retry.Surface = Art.Note;
             retry.Visible = false;
 
             trayMenu = new ContextMenuStrip();
@@ -93,7 +114,7 @@ namespace ScreenStudio
             clock.Interval = 250;
             clock.Tick += delegate
             {
-                tray.Text = "取景台 · 录屏中 " + Duration(elapsed.Elapsed) + " · 单击停止";
+                tray.Text = "取景台 · " + (recordWithMicrophone ? "录屏及麦克风" : "无声录屏") + " " + Duration(elapsed.Elapsed) + " · 单击停止";
                 recordingPanel.UpdateElapsed(elapsed.Elapsed);
                 if (Visible) Invalidate();
             };
@@ -112,18 +133,18 @@ namespace ScreenStudio
         protected override void OnShown(EventArgs e)
         {
             base.OnShown(e);
-            ApplyDpi(GetDpiForWindow(Handle));
+            FitToDisplay(GetDpiForWindow(Handle), Screen.FromHandle(Handle).WorkingArea, Bounds);
             keysStarted = true;
             RegisterKeys();
             CleanAttachments();
             attachmentCleanup.Start();
         }
 
-        private static bool ReadAttachmentPreference()
+        private static bool ReadPreference(string name)
         {
             try
             {
-                object choice = Registry.GetValue(@"HKEY_CURRENT_USER\Software\FrameDesk", "ChatAttachment", 1);
+                object choice = Registry.GetValue(@"HKEY_CURRENT_USER\Software\FrameDesk", name, 1);
                 return !(choice is int) || (int)choice != 0;
             }
             catch (SecurityException) { return false; }
@@ -131,18 +152,16 @@ namespace ScreenStudio
             catch (IOException) { return false; }
         }
 
-        private void ToggleAttachment()
+        private static void SavePreference(string name, bool value)
         {
-            useAttachment = !useAttachment;
             try
             {
-                Registry.SetValue(@"HKEY_CURRENT_USER\Software\FrameDesk", "ChatAttachment",
-                                  useAttachment ? 1 : 0, RegistryValueKind.DWord);
+                Registry.SetValue(@"HKEY_CURRENT_USER\Software\FrameDesk", name,
+                                  value ? 1 : 0, RegistryValueKind.DWord);
             }
             catch (SecurityException) { }
             catch (UnauthorizedAccessException) { }
             catch (IOException) { }
-            RefreshState();
         }
 
         private void CleanAttachments()
@@ -196,6 +215,12 @@ namespace ScreenStudio
 
         protected override void WndProc(ref Message m)
         {
+            if (m.Msg == 0x007E && !closing && captureGuide != null) // WM_DISPLAYCHANGE
+            {
+                base.WndProc(ref m);
+                BeginInvoke((Action)captureGuide.Refresh);
+                return;
+            }
             if (m.Msg == 0x0312 && !closing)
             {
                 int id = m.WParam.ToInt32();
@@ -204,15 +229,28 @@ namespace ScreenStudio
             }
             if (m.Msg == Program.ActivateMessage && !closing)
             {
-                if (recorder == null && !capturing && !changingRecording) RestoreWindow(false);
+                if (recorder == null && !capturing && !changingRecording)
+                {
+                    if (WindowState == FormWindowState.Minimized) ShowWindow(Handle, 9); // SW_RESTORE
+                    RestoreWindow(WindowState);
+                }
                 return;
             }
             if (m.Msg == 0x02E0 && photoTab != null)
             {
                 Rectangle bounds = RectangleFromNative(m.LParam);
                 base.WndProc(ref m);
-                ApplyDpi((uint)(m.WParam.ToInt64() & 0xffff));
-                Location = bounds.Location;
+                FitToDisplay((uint)(m.WParam.ToInt64() & 0xffff), Screen.FromRectangle(bounds).WorkingArea, bounds);
+                return;
+            }
+            if (m.Msg == 0x0112 && (m.WParam.ToInt64() & 0xfff0) == 0xf120 && // SC_RESTORE
+                WindowState == FormWindowState.Maximized)
+            {
+                Rectangle normal = RestoreBounds;
+                base.WndProc(ref m);
+                // WinForms can add the primary screen's frame thickness on a secondary monitor.
+                if (WindowState == FormWindowState.Normal && Location == normal.Location && Size != normal.Size)
+                    Size = normal.Size;
                 return;
             }
             base.WndProc(ref m);
@@ -226,33 +264,59 @@ namespace ScreenStudio
             return Rectangle.FromLTRB(e.Left, e.Top, e.Right, e.Bottom);
         }
 
-        private void ApplyDpi(uint dpi)
+        protected override void OnResizeEnd(EventArgs e)
         {
-            if (dpi == 0 || Math.Abs(zoom - dpi / 96f) < .001f) return;
-            zoom = dpi / 96f;
-            Arrange();
+            base.OnResizeEnd(e);
+            FitToDisplay(GetDpiForWindow(Handle), Screen.FromHandle(Handle).WorkingArea, Bounds);
+        }
+
+        private void FitToDisplay(uint dpi, Rectangle workArea, Rectangle requested)
+        {
+            if (dpi == 0 || WindowState == FormWindowState.Minimized) return;
+            int chromeWidth = Width - ClientSize.Width, chromeHeight = Height - ClientSize.Height;
+            float availableWidth = (workArea.Width - chromeWidth) / (float)DesignWidth;
+            float availableHeight = (workArea.Height - chromeHeight) / (float)DesignHeight;
+            float scale = Math.Min(.85f * dpi / 96f, Math.Min(availableWidth, availableHeight));
+            if (scale <= 0) return;
+            MinimumSize = new Size((int)Math.Round(DesignWidth * scale) + chromeWidth,
+                                   (int)Math.Round(DesignHeight * scale) + chromeHeight);
+            if (WindowState != FormWindowState.Normal) return;
+            int w = Math.Min(workArea.Width, Math.Max(MinimumSize.Width, requested.Width));
+            int h = Math.Min(workArea.Height, Math.Max(MinimumSize.Height, requested.Height));
+            Bounds = new Rectangle(Math.Max(workArea.Left, Math.Min(requested.X, workArea.Right - w)),
+                                   Math.Max(workArea.Top, Math.Min(requested.Y, workArea.Bottom - h)), w, h);
+        }
+
+        protected override void OnClientSizeChanged(EventArgs e)
+        {
+            base.OnClientSizeChanged(e);
+            if (retry != null && WindowState != FormWindowState.Minimized) Arrange();
         }
 
         private void Place(StudioButton b, int x, int y, int w, int h)
         {
             b.Zoom = zoom;
-            b.Bounds = new Rectangle((int)Math.Round(x * zoom), (int)Math.Round(y * zoom),
+            b.Bounds = new Rectangle(contentOrigin.X + (int)Math.Round(x * zoom), contentOrigin.Y + (int)Math.Round(y * zoom),
                 (int)Math.Round(w * zoom), (int)Math.Round(h * zoom));
         }
 
         private void Arrange()
         {
+            if (ClientSize.Width <= 0 || ClientSize.Height <= 0) return;
+            zoom = Math.Min(ClientSize.Width / (float)DesignWidth, ClientSize.Height / (float)DesignHeight);
+            contentOrigin = new Point((ClientSize.Width - (int)Math.Round(DesignWidth * zoom)) / 2,
+                                      (ClientSize.Height - (int)Math.Round(DesignHeight * zoom)) / 2);
             SuspendLayout();
-            ClientSize = new Size((int)Math.Round(DesignWidth * zoom), (int)Math.Round(DesignHeight * zoom));
-            Place(photoTab, 33, 106, 294, 43);
-            Place(videoTab, 329, 106, 294, 43);
-            Place(whole, 48, 222, videoMode ? 274 : 180, 68);
-            Place(area, videoMode ? 333 : 238, 222, videoMode ? 275 : 180, 68);
-            Place(scroll, 428, 222, 180, 68);
-            Place(pointer, 49, 305, videoMode ? 260 : 558, 37);
-            Place(attachment, 335, 305, 272, 37);
-            Place(action, 28, 374, 600, 54);
-            Place(retry, 528, 478, 92, 31);
+            Place(photoTab, 24, 135, 298, 47);
+            Place(videoTab, 334, 135, 298, 47);
+            Place(whole, 40, 235, videoMode ? 282 : 184, 67);
+            Place(area, videoMode ? 334 : 236, 235, videoMode ? 282 : 184, 67);
+            Place(scroll, 432, 235, 184, 67);
+            Place(pointer, 40, 321, videoMode ? 170 : 576, 34);
+            Place(microphone, 216, 321, 164, 34);
+            Place(attachment, 386, 321, 230, 34);
+            Place(action, 24, 381, 608, 56);
+            Place(retry, 525, 473, 87, 30);
             ResumeLayout();
             Invalidate(true);
         }
@@ -261,35 +325,38 @@ namespace ScreenStudio
         {
             base.OnPaint(e);
             Graphics g = e.Graphics;
+            g.TranslateTransform(contentOrigin.X, contentOrigin.Y);
             Art.Init(g, zoom);
-            Art.Box(g, 29, 24, 52, 52, 13, Art.Jade, Color.Transparent);
-            Art.Icon(g, "brand", 40, 35, 30, Color.White);
-            Art.Label(g, "取景台", 94, 18, 240, 41, 27, Art.Ink, true, StringAlignment.Near);
-            Art.Label(g, "桌面截图与录屏", 96, 56, 300, 24, 14, Art.Muted, false, StringAlignment.Near);
+            Art.DrawCover(g, cameraSticker);
+            Art.Label(g, "FrameDesk", 46, 26, 145, 21, 13, Art.Berry, true, StringAlignment.Near);
+            Art.Label(g, "取景台", 43, 43, 108, 40, 31, Art.Ink, true, StringAlignment.Near);
+            Art.Label(g, notice.Length == 0 ? "桌面截图与录屏" : notice, 46, 85, 340, 24, 13.5f,
+                      notice.Length == 0 ? Art.Muted : Art.Berry, false, StringAlignment.Near);
             bool active = recorder != null;
             string state = active ? "录屏中" : (notice.Length > 0 ? "快捷键冲突" : "就绪");
-            float pill = active ? 87 : (notice.Length > 0 ? 111 : 71);
-            Art.Box(g, 627 - pill, 36, pill, 29, 14, active ? Color.FromArgb(255, 231, 226) : Art.Mint, Color.Transparent);
-            Art.Dot(g, active ? Color.Firebrick : Art.Jade, 640 - pill, 47, 7);
-            Art.Label(g, state, 651 - pill, 36, pill - 28, 29, 12, Art.Ink, true, StringAlignment.Center);
+            float pill = active ? 74 : (notice.Length > 0 ? 96 : 60);
+            Color signal = active || notice.Length > 0 ? Art.Berry : Art.Leaf;
+            Art.Box(g, 157, 53, pill, 24, 12, active || notice.Length > 0 ? Art.Note : Color.FromArgb(230, 247, 236), Color.Transparent);
+            Art.Dot(g, signal, 167, 62, 6);
+            Art.Label(g, state, 177, 53, pill-26, 24, 12, signal, true, StringAlignment.Center);
 
-            Art.Box(g, 28, 101, 600, 53, 11, Art.Rail, Color.Transparent);
-            Art.Box(g, 28, 172, 600, 186, 13, Color.White, Art.Line);
-            Art.Label(g, "捕获范围", 48, 183, 200, 29, 16, Art.Ink, true, StringAlignment.Near);
-            Art.Label(g, videoMode ? "MP4  /  无声" : "PNG  /  方框、箭头与文字", 270, 185, 338, 25, 13, Art.Muted, false, StringAlignment.Far);
+            Art.Box(g, 24, 197, 608, 172, 18, Color.FromArgb(241, 227, 230), Color.Transparent);
+            Art.Box(g, 24, 195, 608, 172, 18, Color.White, Art.Line);
+            Art.Label(g, "捕获范围", 42, 201, 145, 29, 16, Art.Ink, true, StringAlignment.Near);
+            string format = videoMode ? (useMicrophone ? "MP4 · 麦克风已开启" : "MP4 · 无声") : "PNG · 支持标注";
+            Art.Label(g, format, 340, 202, 273, 27, 12.5f, Art.Muted, false, StringAlignment.Far);
             using (Pen rule = new Pen(Art.Line))
-            {
-                g.DrawLine(rule, 49, 301, 606, 301);
-                g.DrawLine(rule, 29, 449, 627, 449);
-            }
-            Art.Label(g, "剪贴板", 29, 461, 190, 25, 15, Art.Ink, true, StringAlignment.Near);
+                g.DrawLine(rule, 42, 313, 614, 313);
+
+            Art.Box(g, 24, 452, 608, 66, 16, Art.Note, Color.FromArgb(228, 210, 171));
+            Art.Box(g, 40, 467, 36, 36, 12, Color.FromArgb(255, 253, 242), Color.Transparent);
+            Art.Icon(g, "clipboard", 47, 474, 22, Color.FromArgb(127, 83, 46));
+            Art.Label(g, "剪贴板", 86, 459, 152, 25, 14.5f, Art.Ink, true, StringAlignment.Near);
             string message = clipState.Length > 0 ? clipState : (videoMode ?
                 (useAttachment ? "停止后，在聊天输入框按 Ctrl + V 添加 MP4 附件。" :
                                  "停止后复制内存中的视频。") : (scrollPhoto ?
                  "框选可滚动的内容，向下滚动，完成后标注并复制长图。" : "完成标注后复制，再到需要的位置按 Ctrl + V。"));
-            if (notice.Length > 0) message = message + "  " + notice;
-            Art.Label(g, message, 29, 490, retry != null && retry.Visible ? 491 : 600, 28, 13,
-                notice.Length > 0 ? Color.FromArgb(131, 81, 18) : Art.Muted, false, StringAlignment.Near);
+            Art.Label(g, message, 86, 484, retry.Visible ? 430 : 526, 25, 13, Art.Muted, false, StringAlignment.Near);
         }
 
         private void SelectMode(bool video)
@@ -311,6 +378,8 @@ namespace ScreenStudio
         {
             bool region = videoMode ? videoRegion : photoRegion;
             photoTab.Selected = !videoMode; videoTab.Selected = videoMode;
+            photoTab.AccessibleDescription = videoMode ? "切换到截图" : "已选中截图";
+            videoTab.AccessibleDescription = videoMode ? "已选中录屏" : "切换到录屏";
             bool scrolling = !videoMode && scrollPhoto;
             whole.Selected = !region; area.Selected = region && !scrolling;
             scroll.Visible = !videoMode;
@@ -318,6 +387,10 @@ namespace ScreenStudio
             scroll.AccessibleDescription = scrolling ? "已选中，向下滚动拼接长图" : "框选可滚动区域并拼接长图";
             pointer.Selected = includePointer;
             pointer.AccessibleDescription = includePointer ? "已开启" : "已关闭";
+            microphone.Visible = videoMode;
+            microphone.Enabled = recorder == null && !changingRecording;
+            microphone.Selected = useMicrophone;
+            microphone.AccessibleDescription = useMicrophone ? "已开启，录制 Windows 默认麦克风" : "已关闭，录制无声视频";
             attachment.Visible = videoMode;
             attachment.Selected = useAttachment;
             attachment.AccessibleDescription = useAttachment ? "已开启，复制临时 MP4 文件附件" : "已关闭，视频只存放在内存";
@@ -377,11 +450,12 @@ namespace ScreenStudio
         {
             capturing = true;
             bool duringRecording = recorder != null;
-            minimizedBeforePhoto = WindowState == FormWindowState.Minimized;
+            FormWindowState stateBeforePhoto = WindowState;
             IntPtr previousWindow = GetForegroundWindow();
             Rectangle captureBounds = Screen.FromPoint(Cursor.Position).Bounds;
             try
             {
+                captureGuide.SetTakingPhoto(true);
                 Hide();
                 await Task.Delay(160);
                 if (closing) return;
@@ -395,7 +469,14 @@ namespace ScreenStudio
                     if (!selected.HasValue) return;
                     captureBounds = selected.Value;
                     if (scrolling)
-                        image = await ScrollCaptureSession.CaptureAsync(captureBounds, includePointer);
+                    {
+                        try
+                        {
+                            captureGuide.SetScrolling(captureBounds);
+                            image = await ScrollCaptureSession.CaptureAsync(captureBounds, includePointer);
+                        }
+                        finally { captureGuide.SetScrolling(null); }
+                    }
                 }
                 else image = ScreenCapture.Grab(captureBounds, includePointer);
                 using (Bitmap original = image)
@@ -413,8 +494,9 @@ namespace ScreenStudio
             finally
             {
                 capturing = false;
+                captureGuide.SetTakingPhoto(false);
                 if (!closing && recorder == null && !changingRecording)
-                    RestoreWindow(duringRecording ? minimizedBeforeRecording : minimizedBeforePhoto,
+                    RestoreWindow(duringRecording ? stateBeforeRecording : stateBeforePhoto,
                                   duringRecording ? returnAfterRecording : previousWindow);
             }
         }
@@ -423,8 +505,10 @@ namespace ScreenStudio
         {
             changingRecording = true;
             recordAsAttachment = useAttachment;
+            recordWithMicrophone = useMicrophone;
+            RefreshState();
             stoppingSoon = false;
-            minimizedBeforeRecording = WindowState == FormWindowState.Minimized;
+            stateBeforeRecording = WindowState;
             returnAfterRecording = GetForegroundWindow();
             Rectangle full = Screen.FromPoint(Cursor.Position).Bounds;
             try
@@ -440,7 +524,8 @@ namespace ScreenStudio
                     if (!picked.HasValue) return;
                     region = picked.Value;
                 }
-                bool panelDuringCapture = recordingPanel.TryShowFor(region);
+                captureGuide.SetRecording(region, videoRegion);
+                bool panelDuringCapture = recordingPanel.TryShowFor(region, recordWithMicrophone);
                 tray.Text = "取景台 · 正在准备录屏";
                 tray.Visible = true;
                 if (!panelDuringCapture)
@@ -453,7 +538,7 @@ namespace ScreenStudio
                 else await Task.Delay(100);
                 if (closing) return;
                 DwmFlush();
-                VideoRecorder current = new VideoRecorder(region, FrameRate, includePointer);
+                VideoRecorder current = new VideoRecorder(region, FrameRate, includePointer, recordWithMicrophone);
                 recorder = current;
                 current.Failed += delegate(Exception ex)
                 {
@@ -472,13 +557,14 @@ namespace ScreenStudio
                 if (closing || recorder != current) return;
                 elapsed.Restart();
                 recordingPanel.UpdateElapsed(TimeSpan.Zero);
-                tray.Text = "取景台 · 录屏中 · 按 F2 或单击图标停止";
+                tray.Text = "取景台 · " + (recordWithMicrophone ? "正在录制麦克风" : "无声录屏") + " · 按 F2 停止";
                 if (!panelDuringCapture)
                     tray.ShowBalloonTip(1800, "已开始录屏", "再次按 F2 或单击取景台托盘图标停止。", ToolTipIcon.Info);
                 clock.Start();
             }
             catch (Exception ex)
             {
+                captureGuide.SetRecording(null);
                 if (recorder != null) { recorder.Dispose(); recorder = null; }
                 recordingPanel.Hide();
                 tray.Visible = false;
@@ -491,7 +577,7 @@ namespace ScreenStudio
                 {
                     tray.Visible = false;
                     recordingPanel.Hide();
-                    RestoreWindow(minimizedBeforeRecording, returnAfterRecording);
+                    RestoreWindow(stateBeforeRecording, returnAfterRecording);
                 }
                 if (!closing && recorder != null && stoppingSoon) EndRecording();
             }
@@ -508,7 +594,9 @@ namespace ScreenStudio
             tray.Text = "取景台 · 正在复制录屏";
             try
             {
-                byte[] bytes = await Task.Run((Func<byte[]>)current.Stop);
+                byte[] bytes;
+                try { bytes = await Task.Run((Func<byte[]>)current.Stop); }
+                finally { captureGuide.SetRecording(null); }
                 if (closing) return;
                 StageVideo(bytes);
                 if (await PublishVideoAsync())
@@ -516,6 +604,8 @@ namespace ScreenStudio
                     recordingPanel.ShowCopied(elapsed.Elapsed);
                     dismissCopyNotice.Start();
                 }
+                if (current.MicrophoneError != null)
+                    ShowError("麦克风录音中断，录屏已提前结束", current.MicrophoneError);
             }
             catch (Exception ex) { ShowError("录屏未完成", ex); }
             finally
@@ -525,7 +615,7 @@ namespace ScreenStudio
                 changingRecording = false;
                 tray.Visible = false;
                 if (!dismissCopyNotice.Enabled) recordingPanel.Hide();
-                if (!closing && !capturing) RestoreWindow(minimizedBeforeRecording, returnAfterRecording);
+                if (!closing && !capturing) RestoreWindow(stateBeforeRecording, returnAfterRecording);
             }
         }
 
@@ -633,13 +723,13 @@ namespace ScreenStudio
             if (!closing) MessageBox.Show(ex.Message, title, MessageBoxButtons.OK, MessageBoxIcon.Warning);
         }
 
-        private void RestoreWindow(bool minimized, IntPtr previousWindow = default(IntPtr))
+        private void RestoreWindow(FormWindowState state, IntPtr previousWindow = default(IntPtr))
         {
-            WindowState = minimized ? FormWindowState.Minimized : FormWindowState.Normal;
-            Show();
+            if (WindowState != state) WindowState = state;
+            if (!Visible) Show();
             if (previousWindow != IntPtr.Zero && previousWindow != Handle && IsWindowVisible(previousWindow))
                 SetForegroundWindow(previousWindow);
-            else if (!minimized) Activate();
+            else if (state != FormWindowState.Minimized) Activate();
             if (!PhotoAvailable || !VideoAvailable) RegisterKeys();
             RefreshState();
         }
@@ -654,7 +744,7 @@ namespace ScreenStudio
             {
                 try { elapsed.Stop(); StageVideo(recorder.Stop()); PublishPending(); }
                 catch (Exception ex) { Debug.WriteLine(ex); }
-                finally { recorder.Dispose(); recorder = null; }
+                finally { recorder.Dispose(); recorder = null; captureGuide.SetRecording(null); }
             }
             try { VideoClipboard.FlushOwned(); }
             catch (ExternalException ex)
@@ -678,17 +768,20 @@ namespace ScreenStudio
                 clock.Dispose();
                 dismissCopyNotice.Dispose();
                 attachmentCleanup.Dispose();
+                captureGuide.Dispose();
                 if (pendingAttachmentPath != null) VideoAttachmentStore.RemoveUnpublished(pendingAttachmentPath);
                 if (recordingPanel != null) recordingPanel.Dispose();
                 if (tray != null) { tray.Visible = false; tray.Dispose(); }
                 if (trayMenu != null) trayMenu.Dispose();
                 if (pendingImage != null) pendingImage.Dispose();
                 if (appIcon != null) appIcon.Dispose();
+                if (cameraSticker != null) cameraSticker.Dispose();
             }
             base.Dispose(disposing);
         }
 
         [DllImport("user32.dll")] private static extern uint GetDpiForWindow(IntPtr window);
+        [DllImport("user32.dll")] private static extern bool ShowWindow(IntPtr window, int command);
         [DllImport("user32.dll")] private static extern IntPtr GetForegroundWindow();
         [DllImport("user32.dll")] private static extern bool SetForegroundWindow(IntPtr window);
         [DllImport("user32.dll")] private static extern bool IsWindowVisible(IntPtr window);
