@@ -11,10 +11,12 @@ namespace ScreenStudio
         private const int MaxHeight = 30000;
         private const long MaxPixels = 40000000;
         private static readonly PixelFormat Format = PixelFormat.Format32bppRgb;
-        private readonly List<byte[]> strips = new List<byte[]>();
-        private Bitmap last;
+        private const int RowsPerBlock = 32;
+        private readonly Dictionary<int, byte[]> blocks = new Dictionary<int, byte[]>();
+        private readonly Size frameSize;
         private Sample previous;
-        private int tailStart;
+        // Document coordinates relative to the first viewport. Both can become negative.
+        private int viewportTop, capturedTop;
 
         internal int Height { get; private set; }
         internal string LastStatus { get; private set; }
@@ -26,18 +28,19 @@ namespace ScreenStudio
             if (first == null) throw new ArgumentNullException("first");
             if (first.Height > MaxHeight || (long)first.Width * first.Height > MaxPixels)
                 throw new ArgumentException("选区过大，请缩小后再试。");
+            frameSize = first.Size;
             previous = new Sample(first);
-            last = (Bitmap)first.Clone();
+            TransferRows(first, 0, 0, first.Height, true);
             Height = first.Height;
-            LastStatus = "已截取首屏，向下滚动";
+            LastStatus = "已截取首屏，可向上或向下滚动";
         }
 
-        // Call on one thread. The caller retains ownership of the screen frames.
+        // Returns true only when the captured range grows. A matched revisit still updates the viewport.
         internal bool TryAppend(Bitmap next)
         {
-            if (last == null) throw new ObjectDisposedException("ScrollStitcher");
+            if (previous == null) throw new ObjectDisposedException("ScrollStitcher");
             if (next == null) throw new ArgumentNullException("next");
-            if (next.Size != last.Size) throw new ArgumentException("截图选区的尺寸发生了变化。");
+            if (next.Size != frameSize) throw new ArgumentException("截图选区的尺寸发生了变化。");
             if (LimitReached) return false;
             Unmatched = false;
             Sample current = new Sample(next);
@@ -45,17 +48,20 @@ namespace ScreenStudio
             List<int> probes = current.ChangedFeatures(previous, out first, out end, out changed);
             if (changed <= 3)
             {
-                LastStatus = "等待页面向下滚动";
+                LastStatus = "可向上或向下滚动";
                 return false;
             }
             int shift = current.FindShift(previous, probes, first, end);
-            if (shift <= 0)
+            if (shift == 0)
             {
                 Unmatched = true;
-                LastStatus = "未接上，请稍往回滚，再慢慢向下";
+                LastStatus = "未接上，请滚回一些，再慢慢滚动";
                 return false;
             }
-            int newHeight = Height + shift;
+            int nextTop = viewportTop + shift;
+            int newTop = Math.Min(capturedTop, nextTop);
+            int newBottom = Math.Max(capturedTop + Height, nextTop + frameSize.Height);
+            int newHeight = newBottom - newTop;
             if (newHeight > MaxHeight || (long)newHeight * next.Width > MaxPixels)
             {
                 LimitReached = true;
@@ -63,87 +69,77 @@ namespace ScreenStudio
                 return false;
             }
 
-            // Cut both frames at the same document row, inside the moving overlap. The
-            // first frame retains fixed top chrome, and only the final tail retains the footer.
-            int split = Math.Max(tailStart, (first + end + shift) / 2);
-            int newTailStart = split - shift;
-            if (split > end || newTailStart < first)
+            bool grew = newHeight > Height;
+            if (grew)
             {
-                Unmatched = true;
-                LastStatus = "重叠区域不足，请稍往回滚";
-                return false;
+                // Join inside the moving overlap. Replace the former outer edge so fixed
+                // headers and footers occur only once, even when extending after a reversal.
+                int firstShared = first + Math.Max(0, -shift);
+                int endShared = end - Math.Max(0, shift);
+                int seam = (firstShared + endShared) / 2;
+                if (nextTop < capturedTop)
+                    TransferRows(next, 0, nextTop, seam, true);
+                else
+                    TransferRows(next, seam, nextTop + seam, next.Height - seam, true);
+                capturedTop = newTop;
+                Height = newHeight;
             }
-            Bitmap replacement = (Bitmap)next.Clone();
-            try
-            {
-                int rows = split - tailStart;
-                if (rows > 0) strips.Add(ReadRows(last, tailStart, rows));
-            }
-            catch { replacement.Dispose(); throw; }
-            last.Dispose();
-            last = replacement;
+            viewportTop = nextTop;
             previous = current;
-            tailStart = newTailStart;
-            Height = newHeight;
-            LastStatus = "已拼接，可以继续向下滚动";
-            return true;
+            LastStatus = !grew ? "这部分已截取，可继续滚动" :
+                (shift < 0 ? "已拼接上方内容" : "已拼接下方内容");
+            return grew;
         }
 
         internal Bitmap Render()
         {
-            if (last == null) throw new ObjectDisposedException("ScrollStitcher");
-            if (strips.Count == 0 && tailStart == 0) return (Bitmap)last.Clone();
-            int width = last.Width;
-            Bitmap result = new Bitmap(width, Height, Format);
+            if (previous == null) throw new ObjectDisposedException("ScrollStitcher");
+            Bitmap result = new Bitmap(frameSize.Width, Height, Format);
             try
             {
-                BitmapData target = result.LockBits(new Rectangle(0, 0, width, Height),
-                    ImageLockMode.WriteOnly, Format);
-                try
-                {
-                    int y = 0;
-                    foreach (byte[] strip in strips)
-                    {
-                        WriteRows(strip, target, y, width);
-                        y += strip.Length / (width * 4);
-                    }
-                    WriteRows(ReadRows(last, tailStart, last.Height - tailStart), target, y, width);
-                }
-                finally { result.UnlockBits(target); }
+                TransferRows(result, 0, capturedTop, Height, false);
                 return result;
             }
             catch { result.Dispose(); throw; }
         }
 
-        private static byte[] ReadRows(Bitmap bitmap, int top, int rows)
+        // Fixed-size blocks allow either end to grow without moving previously captured rows.
+        // Revisiting an edge overwrites the same storage, including for one-pixel scrolls.
+        private void TransferRows(Bitmap bitmap, int imageY, int documentY, int rows, bool store)
         {
             int pitch = bitmap.Width * 4;
-            byte[] bytes = new byte[checked(pitch * rows)];
-            BitmapData data = bitmap.LockBits(new Rectangle(0, top, bitmap.Width, rows), ImageLockMode.ReadOnly, Format);
+            BitmapData data = bitmap.LockBits(new Rectangle(0, imageY, bitmap.Width, rows),
+                store ? ImageLockMode.ReadOnly : ImageLockMode.WriteOnly, Format);
             try
             {
-                if (data.Stride == pitch) Marshal.Copy(data.Scan0, bytes, 0, bytes.Length);
-                else for (int i = 0; i < rows; i++)
-                    Marshal.Copy(IntPtr.Add(data.Scan0, i * data.Stride), bytes, i * pitch, pitch);
+                int copied = 0;
+                while (copied < rows)
+                {
+                    int y = documentY + copied;
+                    int rowInBlock = y & (RowsPerBlock - 1);
+                    int blockStart = y - rowInBlock;
+                    byte[] bytes;
+                    if (!blocks.TryGetValue(blockStart, out bytes))
+                    {
+                        if (!store) throw new InvalidOperationException("长图缺少已截取的行。");
+                        bytes = new byte[checked(pitch * RowsPerBlock)];
+                        blocks.Add(blockStart, bytes);
+                    }
+                    int count = Math.Min(rows - copied, RowsPerBlock - rowInBlock);
+                    if (data.Stride != pitch) count = 1;
+                    IntPtr pixels = IntPtr.Add(data.Scan0, copied * data.Stride);
+                    if (store) Marshal.Copy(pixels, bytes, rowInBlock * pitch, count * pitch);
+                    else Marshal.Copy(bytes, rowInBlock * pitch, pixels, count * pitch);
+                    copied += count;
+                }
             }
             finally { bitmap.UnlockBits(data); }
-            return bytes;
-        }
-
-        private static void WriteRows(byte[] bytes, BitmapData target, int y, int width)
-        {
-            int pitch = width * 4;
-            if (target.Stride == pitch)
-                Marshal.Copy(bytes, 0, IntPtr.Add(target.Scan0, y * target.Stride), bytes.Length);
-            else for (int i = 0; i < bytes.Length / pitch; i++)
-                Marshal.Copy(bytes, i * pitch, IntPtr.Add(target.Scan0, (y + i) * target.Stride), pitch);
         }
 
         public void Dispose()
         {
-            if (last != null) { last.Dispose(); last = null; }
             previous = null;
-            strips.Clear();
+            blocks.Clear();
         }
 
         // A narrow RGB sample for every native image row keeps one-pixel precision in
@@ -241,16 +237,20 @@ namespace ScreenStudio
                 int minimumOverlap = Math.Max(12, Math.Min(160, span / 5));
                 if (span <= minimumOverlap || span < rows / 8 || probes.Count < 6) return 0;
                 int maxShift = span - minimumOverlap;
-                double[] scores = new double[maxShift + 1];
+                // Index signed scroll offsets around the center slot. Both directions must
+                // compete for confidence, especially in repeating chat rows and tables.
+                double[] scores = new double[2 * maxShift + 1];
                 int best = 0;
-                for (int shift = 1; shift <= maxShift; shift++)
+                for (int shift = -maxShift; shift <= maxShift; shift++)
                 {
+                    if (shift == 0) continue;
+                    int start = first + Math.Max(0, -shift), stop = end - Math.Max(0, shift);
                     int off = shift * cols, matches = 0, count = 0, goodFrom = rows, goodTo = 0;
                     int error = 0;
                     foreach (int p in probes)
                     {
                         int y = p / cols;
-                        if (y < first || y + shift >= end) continue;
+                        if (y < start || y >= stop) continue;
                         count++;
                         int mismatch = PatchError(old, p, p + off);
                         error += Math.Min(180, mismatch);
@@ -262,31 +262,32 @@ namespace ScreenStudio
                         }
                     }
                     if (matches < 5 || matches * 10 < count * 7 || goodTo - goodFrom < minimumOverlap / 2) continue;
-                    scores[shift] = 1.0 - (double)error / (180 * count);
-                    if (scores[shift] > scores[best]) best = shift;
+                    scores[maxShift + shift] = 1.0 - (double)error / (180 * count);
+                    if (scores[maxShift + shift] > scores[maxShift + best]) best = shift;
                 }
-                if (best == 0 || scores[best] < .76) return 0;
+                if (best == 0 || scores[maxShift + best] < .76) return 0;
                 // Rows with a repeated title or icon can have matching anchor patches but
                 // different timestamps or list numbers. Compare the rest of each shortlisted
                 // alignment before deciding whether those rows are genuinely ambiguous.
-                double cutoff = Math.Max(.70, scores[best] - .15);
+                double cutoff = Math.Max(.70, scores[maxShift + best] - .15);
                 double strongest = 0, second = 0;
                 int candidates = 0, bestShift = 0;
-                for (int shift = 1; shift <= maxShift; shift++)
+                for (int shift = -maxShift; shift <= maxShift; shift++)
                 {
-                    if (scores[shift] < cutoff) { scores[shift] = 0; continue; }
+                    int index = maxShift + shift;
+                    if (scores[index] < cutoff) { scores[index] = 0; continue; }
                     if (++candidates > 96) return 0; // Little distinguishing detail throughout this frame.
                     double confidence = Verify(old, first, end, shift);
-                    scores[shift] = confidence;
+                    scores[index] = confidence;
                     if (confidence > strongest)
                     { second = strongest; strongest = confidence; bestShift = shift; }
                     else second = Math.Max(second, confidence);
                     if (second >= 1) return 0;
                 }
                 if (strongest < .79 || strongest - second < .0001) return 0;
-                for (int shift = 1; shift <= maxShift; shift++)
-                    if (shift != bestShift && scores[shift] >= Math.Max(.76, strongest - .12) &&
-                        !BeatsAlternative(old, first, end, bestShift, shift)) return 0;
+                for (int shift = -maxShift; shift <= maxShift; shift++)
+                    if (shift != bestShift && scores[maxShift + shift] >= Math.Max(.76, strongest - .12) &&
+                        !BeatsAlternative(old, first, end, bestShift, shift, strongest, scores[maxShift + shift])) return 0;
                 return bestShift;
             }
 
@@ -294,12 +295,14 @@ namespace ScreenStudio
             // while its small unique identifiers disagree. Look specifically at pixels
             // that distinguish the competing alignments, rather than letting the repeated
             // rules and backgrounds drown out a wrong identifier.
-            private bool BeatsAlternative(Sample old, int first, int end, int winner, int alternative)
+            private bool BeatsAlternative(Sample old, int first, int end, int winner, int alternative,
+                                          double winnerScore, double alternativeScore)
             {
                 int eligible = 0, matching = 0;
-                int stop = end - Math.Max(winner, alternative);
-                int step = Math.Max(1, (stop - first) / 650);
-                for (int y = first; y < stop; y += step)
+                int start = first - Math.Min(0, Math.Min(winner, alternative));
+                int stop = end - Math.Max(0, Math.Max(winner, alternative));
+                int step = Math.Max(1, (stop - start) / 650);
+                for (int y = start; y < stop; y += step)
                     for (int x = 1; x < cols - 1; x++)
                     {
                         int p = y * cols + x;
@@ -310,15 +313,20 @@ namespace ScreenStudio
                         eligible++;
                         if (Distance(pixels[p], expected) <= Math.Max(11, different / 4)) matching++;
                     }
-                return eligible >= 6 && matching >= eligible * .84;
+                if (eligible >= 6) return matching >= eligible * .84;
+                // Large offsets in opposite directions can align disjoint ends of a list.
+                // With no contradictory common pixels, require a near-exact overlap and a
+                // clear advantage over the rival on the rows that each can actually explain.
+                return (winner < 0) != (alternative < 0) && matching == eligible &&
+                       winnerScore >= .995 && winnerScore - alternativeScore >= .01;
             }
 
             private double Verify(Sample old, int first, int end, int shift)
             {
                 int compared = 0, error = 0, dy = shift * cols;
-                int span = end - first;
-                int step = Math.Max(1, (span - shift) / 300);
-                for (int y = first; y < end - shift; y += step)
+                int start = first + Math.Max(0, -shift), stop = end - Math.Max(0, shift);
+                int step = Math.Max(1, (stop - start) / 300);
+                for (int y = start; y < stop; y += step)
                     for (int x = 1; x < cols - 1; x++)
                     {
                         int p = y * cols + x;

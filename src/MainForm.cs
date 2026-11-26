@@ -75,7 +75,7 @@ namespace ScreenStudio
             scroll = Make(ButtonKind.Scope, "滚动截图", "scroll", delegate { SetRegion(true, true); });
             whole.Detail = "鼠标所在屏幕";
             area.Detail = "可跨屏框选";
-            scroll.Detail = "向下滚动拼接";
+            scroll.Detail = "上下滚动拼接";
             whole.Surface = area.Surface = scroll.Surface = Color.White;
             pointer = Make(ButtonKind.Switch, "显示鼠标指针", "cursor",
                 delegate { includePointer = !includePointer; RefreshState(); });
@@ -359,7 +359,7 @@ namespace ScreenStudio
             string message = clipState.Length > 0 ? clipState : (videoMode ?
                 (useAttachment ? "停止后，在聊天输入框按 Ctrl + V 添加 MP4 附件。" :
                                  "停止后复制内存中的视频。") : (scrollPhoto ?
-                 "框选可滚动的内容，向下滚动，完成后标注并复制长图。" : "完成标注后复制，再到需要的位置按 Ctrl + V。"));
+                 "框选内容后可向上或向下滚动，完成后标注并复制长图。" : "完成标注后复制，再到需要的位置按 Ctrl + V。"));
             Art.Label(g, message, 86, 484, retry.Visible ? 430 : 526, 25, 13, Art.Muted, false, StringAlignment.Near);
         }
 
@@ -388,7 +388,7 @@ namespace ScreenStudio
             whole.Selected = !region; area.Selected = region && !scrolling;
             scroll.Visible = !videoMode;
             scroll.Selected = scrolling;
-            scroll.AccessibleDescription = scrolling ? "已选中，向下滚动拼接长图" : "框选可滚动区域并拼接长图";
+            scroll.AccessibleDescription = scrolling ? "已选中，向上或向下滚动拼接长图" : "框选可滚动区域并拼接长图";
             pointer.Selected = includePointer;
             pointer.AccessibleDescription = includePointer ? "已开启" : "已关闭";
             microphone.Visible = videoMode;

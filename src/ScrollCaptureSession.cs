@@ -125,7 +125,7 @@ namespace ScreenStudio
                     PlaceOn(target, true);
                 }
                 height = stitcher.Height;
-                status = temporaryNotice ? "稍后从取景台托盘图标完成或取消" : "将鼠标移入选区，缓慢向下滚动";
+                status = temporaryNotice ? "稍后从取景台托盘图标完成或取消" : "在选区内缓慢向上或向下滚动";
                 AccessibleDescription = status;
                 Show();
                 Update();
