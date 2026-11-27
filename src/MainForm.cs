@@ -18,7 +18,9 @@ namespace ScreenStudio
         private const int DesignWidth = 656, DesignHeight = 537;
         private float zoom = 1;
         private Point contentOrigin;
-        private readonly StudioButton photoTab, videoTab, whole, area, scroll, pointer, microphone, attachment, action, retry;
+        private readonly StudioButton photoTab, videoTab, whole, area, scroll, pointer, microphone, action, retry;
+        private readonly Panel outputChoices;
+        private readonly OutputChoice attachment, memoryOnly;
         private const string IdleTrayStatus = "取景台 · 单击打开，悬停可退出";
         private readonly TrayIcon tray;
         private readonly ContextMenuStrip trayMenu;
@@ -69,7 +71,7 @@ namespace ScreenStudio
 
             photoTab = Make(ButtonKind.Tab, "截图", "photo", delegate { SelectMode(false); });
             videoTab = Make(ButtonKind.Tab, "录屏", "video", delegate { SelectMode(true); });
-            photoTab.Detail = "F1"; videoTab.Detail = "F2";
+            photoTab.Surface = videoTab.Surface = Art.Rail;
             whole = Make(ButtonKind.Scope, "全屏", "screen", delegate { SetRegion(false); });
             area = Make(ButtonKind.Scope, "框选区域", "region", delegate { SetRegion(true); });
             scroll = Make(ButtonKind.Scope, "滚动截图", "scroll", delegate { SetRegion(true, true); });
@@ -86,12 +88,12 @@ namespace ScreenStudio
                 SavePreference("RecordMicrophone", useMicrophone);
                 RefreshState();
             });
-            attachment = Make(ButtonKind.Switch, "聊天附件（临时 MP4）", "clip", delegate {
-                useAttachment = !useAttachment;
-                SavePreference("ChatAttachment", useAttachment);
-                RefreshState();
-            });
-            microphone.Surface = attachment.Surface = Color.White;
+            microphone.Surface = Color.White;
+            outputChoices = new Panel { AccessibleName = "录屏完成后", AccessibleRole = AccessibleRole.Grouping,
+                                        BackColor = Color.White, TabStop = false };
+            Controls.Add(outputChoices);
+            attachment = AddOutputChoice("复制为聊天附件", "可粘贴到 i讯飞，取景台运行时清理超过 24 小时的临时 MP4。", true);
+            memoryOnly = AddOutputChoice("仅在内存中复制", "在支持的应用中粘贴，粘贴前请保持取景台运行。", false);
             action = Make(ButtonKind.Primary, "", "photo", delegate { RunMode(videoMode); });
             retry = Make(ButtonKind.Link, "重试复制", "", async delegate
             {
@@ -135,6 +137,20 @@ namespace ScreenStudio
             b.Click += delegate { click(); };
             Controls.Add(b);
             return b;
+        }
+
+        private OutputChoice AddOutputChoice(string title, string detail, bool asAttachment)
+        {
+            var choice = new OutputChoice(title, detail);
+            choice.CheckedChanged += delegate
+            {
+                if (!choice.Checked || useAttachment == asAttachment) return;
+                useAttachment = asAttachment;
+                SavePreference("ChatAttachment", useAttachment);
+                RefreshState();
+            };
+            outputChoices.Controls.Add(choice);
+            return choice;
         }
 
         protected override void OnShown(EventArgs e)
@@ -300,8 +316,13 @@ namespace ScreenStudio
         private void Place(StudioButton b, int x, int y, int w, int h)
         {
             b.Zoom = zoom;
-            b.Bounds = new Rectangle(contentOrigin.X + (int)Math.Round(x * zoom), contentOrigin.Y + (int)Math.Round(y * zoom),
-                (int)Math.Round(w * zoom), (int)Math.Round(h * zoom));
+            b.Bounds = ScaledBounds(x, y, w, h);
+        }
+
+        private Rectangle ScaledBounds(int x, int y, int w, int h)
+        {
+            return new Rectangle(contentOrigin.X + (int)Math.Round(x * zoom), contentOrigin.Y + (int)Math.Round(y * zoom),
+                                 (int)Math.Round(w * zoom), (int)Math.Round(h * zoom));
         }
 
         private void Arrange()
@@ -311,16 +332,21 @@ namespace ScreenStudio
             contentOrigin = new Point((ClientSize.Width - (int)Math.Round(DesignWidth * zoom)) / 2,
                                       (ClientSize.Height - (int)Math.Round(DesignHeight * zoom)) / 2);
             SuspendLayout();
-            Place(photoTab, 24, 135, 298, 47);
-            Place(videoTab, 334, 135, 298, 47);
-            Place(whole, 40, 235, videoMode ? 282 : 184, 67);
-            Place(area, videoMode ? 334 : 236, 235, videoMode ? 282 : 184, 67);
-            Place(scroll, 432, 235, 184, 67);
-            Place(pointer, 40, 321, videoMode ? 170 : 576, 34);
-            Place(microphone, 216, 321, 164, 34);
-            Place(attachment, 386, 321, 230, 34);
-            Place(action, 24, 381, 608, 56);
-            Place(retry, 525, 473, 87, 30);
+            Place(photoTab, 32, 108, 96, 28);
+            Place(videoTab, 130, 108, 96, 28);
+            int scopeY = videoMode ? 185 : 197, scopeHeight = videoMode ? 56 : 77;
+            Place(whole, 40, scopeY, videoMode ? 282 : 184, scopeHeight);
+            Place(area, videoMode ? 334 : 236, scopeY, videoMode ? 282 : 184, scopeHeight);
+            Place(scroll, 432, scopeY, 184, scopeHeight);
+            Place(pointer, 40, videoMode ? 253 : 288, videoMode ? 275 : 576, 34);
+            Place(microphone, 341, 253, 275, 34);
+            outputChoices.Bounds = ScaledBounds(40, 340, 576, 80);
+            int choiceHeight = (int)Math.Round(38 * zoom);
+            attachment.Zoom = memoryOnly.Zoom = zoom;
+            attachment.Bounds = new Rectangle(0, 0, outputChoices.ClientSize.Width, choiceHeight);
+            memoryOnly.Bounds = new Rectangle(0, outputChoices.ClientSize.Height - choiceHeight, outputChoices.ClientSize.Width, choiceHeight);
+            Place(action, 24, videoMode ? 439 : 351, 608, 55);
+            Place(retry, 529, videoMode ? 498 : 449, 87, 28);
             ResumeLayout();
             Invalidate(true);
         }
@@ -332,10 +358,8 @@ namespace ScreenStudio
             g.TranslateTransform(contentOrigin.X, contentOrigin.Y);
             Art.Init(g, zoom);
             Art.DrawCover(g, cameraSticker);
-            Art.Label(g, "FrameDesk", 46, 26, 145, 21, 13, Art.Berry, true, StringAlignment.Near);
-            Art.Label(g, "取景台", 43, 43, 108, 40, 31, Art.Ink, true, StringAlignment.Near);
-            Art.Label(g, notice.Length == 0 ? "桌面截图与录屏" : notice, 46, 85, 340, 24, 13.5f,
-                      notice.Length == 0 ? Art.Muted : Art.Berry, false, StringAlignment.Near);
+            Art.Label(g, "FrameDesk", 45, 23, 145, 19, 13, Art.Berry, true, StringAlignment.Near);
+            Art.Label(g, "取景台", 43, 40, 107, 44, 30, Art.Ink, true, StringAlignment.Near);
             bool active = recorder != null;
             string state = active ? "录屏中" : (notice.Length > 0 ? "快捷键冲突" : "就绪");
             float pill = active ? 74 : (notice.Length > 0 ? 96 : 60);
@@ -344,23 +368,35 @@ namespace ScreenStudio
             Art.Dot(g, signal, 167, 62, 6);
             Art.Label(g, state, 177, 53, pill-26, 24, 12, signal, true, StringAlignment.Center);
 
-            Art.Box(g, 24, 197, 608, 172, 18, Color.FromArgb(241, 227, 230), Color.Transparent);
-            Art.Box(g, 24, 195, 608, 172, 18, Color.White, Art.Line);
-            Art.Label(g, "捕获范围", 42, 201, 145, 29, 16, Art.Ink, true, StringAlignment.Near);
-            string format = videoMode ? (useMicrophone ? "MP4 · 麦克风已开启" : "MP4 · 无声") : "PNG · 支持标注";
-            Art.Label(g, format, 340, 202, 273, 27, 12.5f, Art.Muted, false, StringAlignment.Far);
-            using (Pen rule = new Pen(Art.Line))
-                g.DrawLine(rule, 42, 313, 614, 313);
+            Art.Box(g, 24, 104, 210, 36, 18, Art.Rail, Art.Line);
+            string format = videoMode ? (useMicrophone ? "MP4 · 麦克风已开启" : "MP4 · 麦克风已关闭") : "PNG · 支持标注";
+            Art.Label(g, notice.Length > 0 ? notice : format, 242, 104, 387, 36, 12.5f,
+                      notice.Length > 0 ? Art.Berry : Art.Muted, false, StringAlignment.Far);
 
-            Art.Box(g, 24, 452, 608, 66, 16, Art.Note, Color.FromArgb(228, 210, 171));
-            Art.Box(g, 40, 467, 36, 36, 12, Color.FromArgb(255, 253, 242), Color.Transparent);
-            Art.Icon(g, "clipboard", 47, 474, 22, Color.FromArgb(127, 83, 46));
-            Art.Label(g, "剪贴板", 86, 459, 152, 25, 14.5f, Art.Ink, true, StringAlignment.Near);
-            string message = clipState.Length > 0 ? clipState : (videoMode ?
-                (useAttachment ? "停止后，在聊天输入框按 Ctrl + V 添加 MP4 附件。" :
-                                 "停止后复制内存中的视频。") : (scrollPhoto ?
-                 "框选内容后可向上或向下滚动，完成后标注并复制长图。" : "完成标注后复制，再到需要的位置按 Ctrl + V。"));
-            Art.Label(g, message, 86, 484, retry.Visible ? 430 : 526, 25, 13, Art.Muted, false, StringAlignment.Near);
+            Art.Box(g, 24, 151, 608, videoMode ? 145 : 185, 16, Color.White, Art.Line);
+            Art.Label(g, "捕获范围", 40, videoMode ? 154 : 160, 155, 29, 16, Art.Ink, true, StringAlignment.Near);
+            using (Pen rule = new Pen(Art.Line))
+                g.DrawLine(rule, 42, videoMode ? 247 : 281, 614, videoMode ? 247 : 281);
+
+            if (videoMode)
+            {
+                Art.Box(g, 24, 307, 608, 122, 16, Color.White, Art.Line);
+                Art.Label(g, "录屏完成后", 40, 310, 180, 29, 16, Art.Ink, true, StringAlignment.Near);
+                Art.Icon(g, useAttachment && clipState.Length == 0 ? "clip" : "clipboard", 28, 503, 18, Art.Muted);
+                string message = clipState.Length > 0 ? clipState :
+                    (useAttachment ? "停止录屏后，按 Ctrl + V 粘贴 MP4 附件。" : "停止录屏后，在支持的应用中按 Ctrl + V 粘贴。");
+                Art.Label(g, message, 52, 496, retry.Visible ? 468 : 564, 31, 12.5f, Art.Muted, false, StringAlignment.Near);
+            }
+            else
+            {
+                Art.Box(g, 24, 421, 608, 86, 16, Art.Note, Color.FromArgb(228, 210, 171));
+                Art.Box(g, 40, 445, 38, 38, 12, Color.FromArgb(255, 253, 242), Color.Transparent);
+                Art.Icon(g, "clipboard", 48, 453, 22, Color.FromArgb(127, 83, 46));
+                Art.Label(g, "剪贴板", 90, 436, 152, 26, 15, Art.Ink, true, StringAlignment.Near);
+                string message = clipState.Length > 0 ? clipState : (scrollPhoto ?
+                    "框选后可以向上或向下滚动，完成后标注并复制长图。" : "完成标注后按 Enter 复制，再到需要的位置按 Ctrl + V 粘贴。");
+                Art.Label(g, message, 90, 465, retry.Visible ? 431 : 524, 25, 13, Art.Muted, false, StringAlignment.Near);
+            }
         }
 
         private void SelectMode(bool video)
@@ -395,16 +431,16 @@ namespace ScreenStudio
             microphone.Enabled = recorder == null && !changingRecording;
             microphone.Selected = useMicrophone;
             microphone.AccessibleDescription = useMicrophone ? "已开启，录制 Windows 默认麦克风" : "已关闭，录制无声视频";
-            attachment.Visible = videoMode;
-            attachment.Selected = useAttachment;
-            attachment.AccessibleDescription = useAttachment ? "已开启，复制临时 MP4 文件附件" : "已关闭，视频只存放在内存";
+            outputChoices.Visible = videoMode;
+            attachment.Checked = useAttachment;
+            memoryOnly.Checked = !useAttachment;
             whole.AccessibleDescription = whole.Selected ? "已选中" : "选择全屏";
             area.AccessibleDescription = area.Selected ? "已选中" : "选择区域";
             action.Text = videoMode ? (recorder == null ? "开始录屏" : "停止录屏并复制") :
-                (scrolling ? "开始滚动截图" : (region ? "框选截图并标注" : "全屏截图并标注"));
+                (scrolling ? "开始滚动截图" : (region ? "开始框选截图" : "开始全屏截图"));
             action.Glyph = videoMode ? "video" : (scrolling ? "scroll" : "photo");
             action.Detail = videoMode ? (VideoAvailable ? "F2 开始 / 停止" : "使用此按钮") :
-                (PhotoAvailable ? "F1 截图" : "使用此按钮");
+                (PhotoAvailable ? "F1" : "使用此按钮");
             Invalidate(true);
         }
 

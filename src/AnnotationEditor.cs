@@ -54,35 +54,59 @@ namespace ScreenStudio
                 Location = new Point(available.X + (available.Width - Width) / 2, available.Y + (available.Height - Height) / 2);
 
                 Canvas = new EditorCanvas(original, longImage) { Dock = DockStyle.Fill };
-                var toolbar = new FlowLayoutPanel {
-                    Dock = DockStyle.Fill, Padding = new Padding((int)(10 * dpi), (int)(6 * dpi), 0, (int)(6 * dpi)),
-                    AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, WrapContents = true,
+                var toolbar = new TableLayoutPanel {
+                    Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 1,
+                    Padding = new Padding((int)(10 * dpi), (int)(7 * dpi), (int)(10 * dpi), (int)(5 * dpi)),
                     Margin = Padding.Empty, BackColor = Art.Paper
                 };
-                selectButton = CreateButton("选择", dpi, delegate { SelectMode(Tool.Select); });
-                boxButton = CreateButton("红色方框", dpi, delegate { SelectMode(Tool.Box); });
-                arrowButton = CreateButton("红色箭头", dpi, delegate { SelectMode(Tool.Arrow); });
-                textButton = CreateButton("红色文字", dpi, delegate { SelectMode(Tool.Text); });
-                undoButton = CreateButton("撤销", dpi, delegate { Canvas.Undo(); });
-                Button copy = CreateButton("复制到剪贴板", dpi, delegate { Confirm(); });
-                copy.BackColor = Art.Pink;
-                copy.ForeColor = Art.Ink;
+                toolbar.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+                toolbar.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+                var tools = new FlowLayoutPanel { Dock = DockStyle.Fill,
+                    WrapContents = true, Margin = Padding.Empty, AccessibleName = "标注工具" };
+                var commands = new FlowLayoutPanel { Anchor = AnchorStyles.Top | AnchorStyles.Right,
+                    AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, WrapContents = false, Margin = Padding.Empty };
+                selectButton = CreateButton("移动/调整", "move", dpi, delegate { SelectMode(Tool.Select); });
+                selectButton.AccessibleDescription = "拖动标注移动，拖动控制点调整，双击文字修改内容";
+                boxButton = CreateButton("方框", "box", dpi, delegate { SelectMode(Tool.Box); });
+                arrowButton = CreateButton("箭头", "arrow", dpi, delegate { SelectMode(Tool.Arrow); });
+                textButton = CreateButton("文字", "text", dpi, delegate { SelectMode(Tool.Text); });
+                undoButton = CreateButton("撤销", "undo", dpi, delegate { Canvas.Undo(); });
+                Button copy = CreateButton("完成并复制  ↵", "check", dpi, delegate { Confirm(); });
+                copy.AccessibleName = "完成并复制";
+                copy.AccessibleDescription = "按 Enter 将标注后的截图复制到剪贴板";
+                copy.BackColor = Art.Berry;
+                copy.ForeColor = Color.White;
                 copy.FlatAppearance.BorderColor = Art.Berry;
-                Button cancel = CreateButton("取消", dpi, delegate { DialogResult = DialogResult.Cancel; });
-                toolbar.Controls.AddRange(new Control[] { selectButton, boxButton, arrowButton, textButton, undoButton, copy, cancel });
+                copy.Margin = new Padding(0, 0, 0, (int)(2 * dpi));
+                Button cancel = CreateButton("取消", null, dpi, delegate { DialogResult = DialogResult.Cancel; });
+                tools.Controls.AddRange(new Control[] { selectButton, boxButton, arrowButton, textButton, undoButton });
+                commands.Controls.AddRange(new Control[] { cancel, copy });
+                toolbar.Controls.Add(tools, 0, 0);
+                toolbar.Controls.Add(commands, 1, 0);
                 var status = new Label {
                     AutoSize = true, Padding = new Padding((int)(12 * dpi), (int)(6 * dpi), (int)(8 * dpi), (int)(6 * dpi)),
                     ForeColor = Art.Muted, TextAlign = ContentAlignment.MiddleLeft, Margin = Padding.Empty
                 };
                 var layout = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 3, Margin = Padding.Empty, Padding = Padding.Empty };
                 layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-                layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+                var toolRow = new RowStyle(SizeType.Absolute);
+                layout.RowStyles.Add(toolRow);
                 layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
                 layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
                 layout.Controls.Add(toolbar, 0, 0);
                 layout.Controls.Add(Canvas, 0, 1);
                 layout.Controls.Add(status, 0, 2);
                 Controls.Add(layout);
+                // Measure the wrapped tools at their actual width. Measuring this row at zero
+                // width reserves a full row for each tool even after the window is widened.
+                Action fitTools = delegate {
+                    Size commandSize = commands.GetPreferredSize(Size.Empty);
+                    int toolsWidth = Math.Max(1, layout.ClientSize.Width - toolbar.Padding.Horizontal - commandSize.Width);
+                    int toolsHeight = tools.GetPreferredSize(new Size(toolsWidth, 0)).Height;
+                    toolRow.Height = toolbar.Padding.Vertical + Math.Max(toolsHeight, commandSize.Height);
+                };
+                layout.SizeChanged += delegate { fitTools(); };
+                fitTools();
                 Canvas.StateChanged += delegate {
                     undoButton.Enabled = Canvas.CanUndo;
                     SetActive(selectButton, Canvas.ActiveTool == Tool.Select);
@@ -118,15 +142,30 @@ namespace ScreenStudio
             [DllImport("user32.dll")]
             private static extern uint GetDpiForWindow(IntPtr window);
 
-            private static Button CreateButton(string label, float dpi, EventHandler click)
+            private static Button CreateButton(string label, string glyph, float dpi, EventHandler click)
             {
                 var b = new Button {
                     Text = label, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink,
                     FlatStyle = FlatStyle.Flat, UseVisualStyleBackColor = false,
-                    BackColor = Color.White, ForeColor = Art.Ink,
-                    Padding = new Padding((int)(7 * dpi), (int)(3 * dpi), (int)(7 * dpi), (int)(3 * dpi)),
-                    MinimumSize = new Size(0, (int)(32 * dpi)), Margin = new Padding(0, 0, (int)(6 * dpi), 0)
+                    BackColor = Color.White, ForeColor = Art.Ink, Cursor = Cursors.Hand,
+                    Padding = new Padding((int)(6 * dpi), (int)(3 * dpi), (int)(6 * dpi), (int)(3 * dpi)),
+                    MinimumSize = new Size(0, (int)(32 * dpi)), Margin = new Padding(0, 0, (int)(5 * dpi), (int)(2 * dpi))
                 };
+                if (glyph != null)
+                {
+                    int size = (int)Math.Round(19 * dpi);
+                    var icon = new Bitmap(size, size);
+                    Color ink = glyph == "check" ? Color.White :
+                                (glyph == "box" || glyph == "arrow" || glyph == "text" ? MarkRed : Art.Muted);
+                    using (Graphics g = Graphics.FromImage(icon))
+                    {
+                        Art.Init(g, 1);
+                        Art.Icon(g, glyph, 0, 0, size, ink);
+                    }
+                    b.Image = icon;
+                    b.TextImageRelation = TextImageRelation.ImageBeforeText;
+                    b.Disposed += delegate { icon.Dispose(); };
+                }
                 b.FlatAppearance.BorderColor = Art.Line;
                 b.Click += click;
                 return b;
