@@ -73,8 +73,8 @@ namespace ScreenStudio
                 ShowInTaskbar = false;
                 TopMost = true;
                 DoubleBuffered = true;
-                BackColor = Art.Ink;
-                finish = MakeButton("完成", Art.Iris, delegate { End(true); });
+                BackColor = StudioSkin.Current.Ink;
+                finish = MakeButton("完成", StudioSkin.Current.SecondaryFill, delegate { End(true); });
                 cancel = MakeButton("取消", Color.WhiteSmoke, delegate { End(false); });
                 sampling.Tick += OnSample;
             }
@@ -83,7 +83,7 @@ namespace ScreenStudio
             {
                 var button = new Button {
                     Text = text, AccessibleName = text, TabStop = false, FlatStyle = FlatStyle.Flat,
-                    Cursor = Cursors.Hand, BackColor = fill, ForeColor = Art.Ink,
+                    Cursor = Cursors.Hand, BackColor = fill, ForeColor = StudioSkin.Current.Ink,
                     UseVisualStyleBackColor = false
                 };
                 button.FlatAppearance.BorderSize = 0;
@@ -279,9 +279,9 @@ namespace ScreenStudio
                 Graphics g = e.Graphics;
                 Art.Init(g, zoom);
                 float available = ClientSize.Width / zoom - 235;
-                Art.Dot(g, stitcher.LimitReached || stitcher.Unmatched ? Color.Gold : Art.Mint, 12, 17, 8);
+                Art.Dot(g, stitcher.LimitReached || stitcher.Unmatched ? Color.Gold : StudioSkin.Current.SuccessFill, 12, 17, 8);
                 Art.Label(g, "滚动截图  ·  " + height + " px", 28, 6, available, 29, 15, Color.White, true, StringAlignment.Near);
-                Art.Label(g, status, 12, 32, available + 16, 24, 12, Art.Lilac, false, StringAlignment.Near);
+                Art.Label(g, status, 12, 32, available + 16, 24, 12, StudioSkin.Current.SecondaryTint, false, StringAlignment.Near);
             }
 
             protected override void OnFormClosed(FormClosedEventArgs e)

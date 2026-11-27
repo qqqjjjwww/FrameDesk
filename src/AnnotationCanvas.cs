@@ -601,7 +601,7 @@ namespace ScreenStudio
 
             private void PaintSelection(Graphics g, AnnotationShape shape, float px)
             {
-                using (var edge = new Pen(Art.Violet, 1.35F * px))
+                using (var edge = new Pen(StudioSkin.Current.Secondary, 1.35F * px))
                 using (var white = new SolidBrush(Color.White))
                 {
                     if (shape.Kind == ShapeKind.Text)

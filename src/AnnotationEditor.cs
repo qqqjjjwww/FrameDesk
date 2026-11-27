@@ -38,8 +38,8 @@ namespace ScreenStudio
             {
                 Text = "截图标注";
                 Font = new Font("Microsoft YaHei UI", 9F);
-                BackColor = Art.Paper;
-                ForeColor = Art.Ink;
+                BackColor = StudioSkin.Current.Paper;
+                ForeColor = StudioSkin.Current.Ink;
                 StartPosition = FormStartPosition.Manual;
                 ShowInTaskbar = true;
                 TopMost = true;
@@ -57,7 +57,7 @@ namespace ScreenStudio
                 var toolbar = new TableLayoutPanel {
                     Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 1,
                     Padding = new Padding((int)(10 * dpi), (int)(7 * dpi), (int)(10 * dpi), (int)(5 * dpi)),
-                    Margin = Padding.Empty, BackColor = Art.Paper
+                    Margin = Padding.Empty, BackColor = StudioSkin.Current.Paper
                 };
                 toolbar.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
                 toolbar.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
@@ -74,9 +74,9 @@ namespace ScreenStudio
                 Button copy = CreateButton("完成并复制  ↵", "check", dpi, delegate { Confirm(); });
                 copy.AccessibleName = "完成并复制";
                 copy.AccessibleDescription = "按 Enter 将标注后的截图复制到剪贴板";
-                copy.BackColor = Art.Berry;
+                copy.BackColor = StudioSkin.Current.Accent;
                 copy.ForeColor = Color.White;
-                copy.FlatAppearance.BorderColor = Art.Berry;
+                copy.FlatAppearance.BorderColor = StudioSkin.Current.Accent;
                 copy.Margin = new Padding(0, 0, 0, (int)(2 * dpi));
                 Button cancel = CreateButton("取消", null, dpi, delegate { DialogResult = DialogResult.Cancel; });
                 tools.Controls.AddRange(new Control[] { selectButton, boxButton, arrowButton, textButton, undoButton });
@@ -85,7 +85,7 @@ namespace ScreenStudio
                 toolbar.Controls.Add(commands, 1, 0);
                 var status = new Label {
                     AutoSize = true, Padding = new Padding((int)(12 * dpi), (int)(6 * dpi), (int)(8 * dpi), (int)(6 * dpi)),
-                    ForeColor = Art.Muted, TextAlign = ContentAlignment.MiddleLeft, Margin = Padding.Empty
+                    ForeColor = StudioSkin.Current.Muted, TextAlign = ContentAlignment.MiddleLeft, Margin = Padding.Empty
                 };
                 var layout = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 3, Margin = Padding.Empty, Padding = Padding.Empty };
                 layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
@@ -147,7 +147,7 @@ namespace ScreenStudio
                 var b = new Button {
                     Text = label, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink,
                     FlatStyle = FlatStyle.Flat, UseVisualStyleBackColor = false,
-                    BackColor = Color.White, ForeColor = Art.Ink, Cursor = Cursors.Hand,
+                    BackColor = Color.White, ForeColor = StudioSkin.Current.Ink, Cursor = Cursors.Hand,
                     Padding = new Padding((int)(6 * dpi), (int)(3 * dpi), (int)(6 * dpi), (int)(3 * dpi)),
                     MinimumSize = new Size(0, (int)(32 * dpi)), Margin = new Padding(0, 0, (int)(5 * dpi), (int)(2 * dpi))
                 };
@@ -156,7 +156,7 @@ namespace ScreenStudio
                     int size = (int)Math.Round(19 * dpi);
                     var icon = new Bitmap(size, size);
                     Color ink = glyph == "check" ? Color.White :
-                                (glyph == "box" || glyph == "arrow" || glyph == "text" ? MarkRed : Art.Muted);
+                                (glyph == "box" || glyph == "arrow" || glyph == "text" ? MarkRed : StudioSkin.Current.Muted);
                     using (Graphics g = Graphics.FromImage(icon))
                     {
                         Art.Init(g, 1);
@@ -166,16 +166,16 @@ namespace ScreenStudio
                     b.TextImageRelation = TextImageRelation.ImageBeforeText;
                     b.Disposed += delegate { icon.Dispose(); };
                 }
-                b.FlatAppearance.BorderColor = Art.Line;
+                b.FlatAppearance.BorderColor = StudioSkin.Current.Line;
                 b.Click += click;
                 return b;
             }
 
             private static void SetActive(Button b, bool active)
             {
-                b.BackColor = active ? Art.Lilac : Color.White;
-                b.ForeColor = active ? Art.Violet : Art.Ink;
-                b.FlatAppearance.BorderColor = active ? Art.Violet : Art.Line;
+                b.BackColor = active ? StudioSkin.Current.SecondaryTint : Color.White;
+                b.ForeColor = active ? StudioSkin.Current.Secondary : StudioSkin.Current.Ink;
+                b.FlatAppearance.BorderColor = active ? StudioSkin.Current.Secondary : StudioSkin.Current.Line;
             }
 
             private void SelectMode(Tool mode)

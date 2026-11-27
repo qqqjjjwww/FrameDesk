@@ -136,7 +136,7 @@ namespace ScreenStudio
                 int width = Math.Max(2, (int)Math.Round(2 * e.Graphics.DpiX / 96F));
                 rim.Inflate(width, width);
                 // The native window region clips out the selection, including its very first/last pixel.
-                using (var accent = new SolidBrush(Art.Pink)) e.Graphics.FillRectangle(accent, rim);
+                using (var accent = new SolidBrush(StudioSkin.Current.PrimaryFill)) e.Graphics.FillRectangle(accent, rim);
             }
 
             protected override void WndProc(ref Message m)

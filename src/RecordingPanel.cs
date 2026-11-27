@@ -28,19 +28,27 @@ namespace ScreenStudio
             ShowInTaskbar = false;
             TopMost = true;
             DoubleBuffered = true;
-            BackColor = Art.Ink;
             stopFont = new Font("Microsoft YaHei UI", 10f, FontStyle.Bold);
             stop = new Button {
                 Text = "停止 · F2", AccessibleName = "停止录屏并复制",
-                ForeColor = Art.Berry, BackColor = Art.Blush,
                 UseVisualStyleBackColor = false, FlatStyle = FlatStyle.Flat,
                 Font = stopFont, TabStop = false, Cursor = Cursors.Hand
             };
             stop.FlatAppearance.BorderSize = 0;
             stop.FlatAppearance.MouseOverBackColor = Color.White;
-            stop.FlatAppearance.MouseDownBackColor = Art.Pink;
             stop.Click += delegate { stopRecording(); };
             Controls.Add(stop);
+            ApplySkin();
+        }
+
+        internal void ApplySkin()
+        {
+            StudioSkin skin = StudioSkin.Current;
+            BackColor = skin.Ink;
+            stop.ForeColor = skin.Accent;
+            stop.BackColor = skin.Tint;
+            stop.FlatAppearance.MouseDownBackColor = skin.PrimaryFill;
+            Invalidate(true);
         }
 
         internal bool TryShowFor(Rectangle region, bool microphone = false)
@@ -180,21 +188,21 @@ namespace ScreenStudio
             base.OnPaint(e);
             Graphics g = e.Graphics;
             Art.Init(g, zoom);
-            using (Pen border = new Pen(Art.Muted))
+            using (Pen border = new Pen(StudioSkin.Current.Muted))
                 g.DrawRectangle(border, .5f, .5f, ClientSize.Width / zoom - 1, ClientSize.Height / zoom - 1);
             bool live = phase == Phase.Recording;
             bool copied = phase == Phase.Copied;
-            Color signal = copied ? Art.Mint : (live ? Color.FromArgb(255, 122, 144) : Color.FromArgb(246, 196, 111));
+            Color signal = copied ? StudioSkin.Current.SuccessFill : (live ? Color.FromArgb(255, 122, 144) : Color.FromArgb(246, 196, 111));
             Art.Dot(g, signal, 16, 21, 10);
             string status = phase == Phase.Preparing ? "正在准备录屏" : (live ? "录制中" : (copied ? "录屏已复制" : "正在复制…"));
             Art.Label(g, status, 36, 0, live ? 61 : 156, 52, 16, Color.White, true, StringAlignment.Near);
             if (live || copied)
             {
-                if (live && microphoneOn) Art.Icon(g, "microphone", 85, 18, 16, Art.Mint);
+                if (live && microphoneOn) Art.Icon(g, "microphone", 85, 18, 16, StudioSkin.Current.SuccessFill);
                 string time = elapsed.TotalHours >= 1
                     ? ((long)elapsed.TotalHours).ToString(CultureInfo.InvariantCulture) + elapsed.ToString(@"\:mm\:ss")
                     : elapsed.ToString(@"mm\:ss");
-                Art.Label(g, time, copied ? 194 : 102, 0, 90, 52, 18, Art.Lilac, false, StringAlignment.Near);
+                Art.Label(g, time, copied ? 194 : 102, 0, 90, 52, 18, StudioSkin.Current.SecondaryTint, false, StringAlignment.Near);
             }
         }
 

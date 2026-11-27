@@ -18,7 +18,9 @@ namespace ScreenStudio
         private const int DesignWidth = 656, DesignHeight = 537;
         private float zoom = 1;
         private Point contentOrigin;
-        private readonly StudioButton photoTab, videoTab, whole, area, scroll, pointer, microphone, action, retry;
+        private readonly StudioButton photoTab, videoTab, whole, area, scroll, pointer, microphone, action, retry, skinButton;
+        private readonly ContextMenuStrip skinMenu;
+        private SkinMenuItem selectedSkin;
         private readonly Panel outputChoices;
         private readonly OutputChoice attachment, memoryOnly;
         private const string IdleTrayStatus = "取景台 · 单击打开，悬停可退出";
@@ -46,7 +48,6 @@ namespace ScreenStudio
         private byte[] pendingVideo;
         private string pendingDetail, pendingName, pendingAttachmentPath;
         private readonly Icon appIcon;
-        private readonly Bitmap cameraSticker;
 
         internal MainForm()
         {
@@ -54,16 +55,12 @@ namespace ScreenStudio
             AccessibleName = "取景台 · 桌面截图与录屏";
             appIcon = Icon.ExtractAssociatedIcon(Application.ExecutablePath);
             Icon = appIcon;
-            using (Stream embedded = typeof(MainForm).Assembly.GetManifestResourceStream("ScreenStudio.CameraMascot.png"))
-            {
-                if (embedded != null)
-                    using (var image = new Bitmap(embedded)) cameraSticker = new Bitmap(image);
-            }
+            StudioSkin.Current = StudioSkin.Find(ReadPreferenceValue("Skin", null) as string);
             AutoScaleMode = AutoScaleMode.None;
             FormBorderStyle = FormBorderStyle.Sizable;
             MaximizeBox = true;
             StartPosition = FormStartPosition.CenterScreen;
-            BackColor = Art.Paper;
+            BackColor = StudioSkin.Current.Paper;
             DoubleBuffered = true;
             using (Graphics g = CreateGraphics())
                 ClientSize = new Size((int)Math.Round(DesignWidth * g.DpiX / 96f),
@@ -71,7 +68,24 @@ namespace ScreenStudio
 
             photoTab = Make(ButtonKind.Tab, "截图", "photo", delegate { SelectMode(false); });
             videoTab = Make(ButtonKind.Tab, "录屏", "video", delegate { SelectMode(true); });
-            photoTab.Surface = videoTab.Surface = Art.Rail;
+            skinButton = Make(ButtonKind.Skin, "皮肤", "palette", ShowSkinMenu);
+            skinButton.AccessibleRole = AccessibleRole.ButtonDropDown;
+            skinButton.KeyDown += delegate(object sender, KeyEventArgs e) {
+                if (e.KeyCode == Keys.Down) { e.SuppressKeyPress = true; ShowSkinMenu(); }
+            };
+            skinMenu = new ContextMenuStrip {
+                AccessibleName = "选择皮肤", ShowImageMargin = false, ShowCheckMargin = false,
+                AutoSize = false, BackColor = Color.White
+            };
+            foreach (StudioSkin skin in StudioSkin.All)
+            {
+                var item = new SkinMenuItem(skin);
+                item.Click += delegate(object sender, EventArgs e) {
+                    StudioSkin choice = ((SkinMenuItem)sender).Skin;
+                    if (choice != StudioSkin.Current) { ApplySkin(choice); SavePreferenceValue("Skin", choice.Id, RegistryValueKind.String); }
+                };
+                skinMenu.Items.Add(item);
+            }
             whole = Make(ButtonKind.Scope, "全屏", "screen", delegate { SetRegion(false); });
             area = Make(ButtonKind.Scope, "框选区域", "region", delegate { SetRegion(true); });
             scroll = Make(ButtonKind.Scope, "滚动截图", "scroll", delegate { SetRegion(true, true); });
@@ -99,7 +113,6 @@ namespace ScreenStudio
             {
                 if (pendingVideo != null) await PublishVideoAsync(); else PublishPending();
             });
-            retry.Surface = Art.Note;
             retry.Visible = false;
 
             trayMenu = new ContextMenuStrip();
@@ -127,8 +140,37 @@ namespace ScreenStudio
                 recordingPanel.UpdateElapsed(elapsed.Elapsed);
                 if (Visible) Invalidate();
             };
+            ApplySkin(StudioSkin.Current);
             Arrange();
             RefreshState();
+        }
+
+        private void ShowSkinMenu()
+        {
+            float dpi = Math.Max(1f, GetDpiForWindow(skinButton.Handle) / 96f);
+            foreach (SkinMenuItem item in skinMenu.Items) item.SizeForDpi(dpi);
+            // The native menu normally measures only the item text, excluding our thumbnail and check.
+            skinMenu.Size = new Size(selectedSkin.Width + skinMenu.Padding.Horizontal,
+                                     selectedSkin.Height * skinMenu.Items.Count + skinMenu.Padding.Vertical);
+            skinMenu.Show(skinButton, new Point(skinButton.Width, skinButton.Height), ToolStripDropDownDirection.BelowLeft);
+            selectedSkin.Select();
+        }
+
+        private void ApplySkin(StudioSkin skin)
+        {
+            StudioSkin.Current = skin;
+            foreach (SkinMenuItem item in skinMenu.Items)
+            {
+                item.Checked = item.Skin == skin;
+                if (item.Checked) selectedSkin = item;
+            }
+            BackColor = action.Surface = skinButton.Surface = skin.Paper;
+            photoTab.Surface = videoTab.Surface = skin.Rail;
+            retry.Surface = videoMode ? skin.Paper : skin.Note;
+            skinButton.AccessibleDescription = "当前皮肤为" + skin.Name + "，点击切换";
+            tray.ApplySkin();
+            recordingPanel.ApplySkin();
+            Invalidate(true);
         }
 
         private StudioButton Make(ButtonKind kind, string text, string glyph, Action click)
@@ -166,22 +208,32 @@ namespace ScreenStudio
 
         private static bool ReadPreference(string name)
         {
+            object choice = ReadPreferenceValue(name, 1);
+            return choice != null && (!(choice is int) || (int)choice != 0);
+        }
+
+        private const string PreferencesPath = @"HKEY_CURRENT_USER\Software\FrameDesk";
+        private static object ReadPreferenceValue(string name, object fallback)
+        {
             try
             {
-                object choice = Registry.GetValue(@"HKEY_CURRENT_USER\Software\FrameDesk", name, 1);
-                return !(choice is int) || (int)choice != 0;
+                return Registry.GetValue(PreferencesPath, name, fallback) ?? fallback;
             }
-            catch (SecurityException) { return false; }
-            catch (UnauthorizedAccessException) { return false; }
-            catch (IOException) { return false; }
+            catch (SecurityException) { return null; }
+            catch (UnauthorizedAccessException) { return null; }
+            catch (IOException) { return null; }
         }
 
         private static void SavePreference(string name, bool value)
         {
+            SavePreferenceValue(name, value ? 1 : 0, RegistryValueKind.DWord);
+        }
+
+        private static void SavePreferenceValue(string name, object value, RegistryValueKind kind)
+        {
             try
             {
-                Registry.SetValue(@"HKEY_CURRENT_USER\Software\FrameDesk", name,
-                                  value ? 1 : 0, RegistryValueKind.DWord);
+                Registry.SetValue(PreferencesPath, name, value, kind);
             }
             catch (SecurityException) { }
             catch (UnauthorizedAccessException) { }
@@ -334,6 +386,7 @@ namespace ScreenStudio
             SuspendLayout();
             Place(photoTab, 32, 108, 96, 28);
             Place(videoTab, 130, 108, 96, 28);
+            Place(skinButton, 545, 105, 87, 34);
             int scopeY = videoMode ? 185 : 197, scopeHeight = videoMode ? 56 : 77;
             Place(whole, 40, scopeY, videoMode ? 282 : 184, scopeHeight);
             Place(area, videoMode ? 334 : 236, scopeY, videoMode ? 282 : 184, scopeHeight);
@@ -355,47 +408,49 @@ namespace ScreenStudio
         {
             base.OnPaint(e);
             Graphics g = e.Graphics;
+            StudioSkin skin = StudioSkin.Current;
             g.TranslateTransform(contentOrigin.X, contentOrigin.Y);
             Art.Init(g, zoom);
-            Art.DrawCover(g, cameraSticker);
-            Art.Label(g, "FrameDesk", 45, 23, 145, 19, 13, Art.Berry, true, StringAlignment.Near);
-            Art.Label(g, "取景台", 43, 40, 107, 44, 30, Art.Ink, true, StringAlignment.Near);
+            if (selectedSkin != null)
+                Art.DrawCover(g, new Rectangle(24, 16, 608, 78), selectedSkin.Skin, selectedSkin.Sticker, false);
+            Art.Label(g, "FrameDesk", 45, 23, 145, 19, 13, skin.Accent, true, StringAlignment.Near);
+            Art.Label(g, "取景台", 43, 40, 107, 44, 30, skin.Ink, true, StringAlignment.Near);
             bool active = recorder != null;
             string state = active ? "录屏中" : (notice.Length > 0 ? "快捷键冲突" : "就绪");
             float pill = active ? 74 : (notice.Length > 0 ? 96 : 60);
-            Color signal = active || notice.Length > 0 ? Art.Berry : Art.Leaf;
-            Art.Box(g, 157, 53, pill, 24, 12, active || notice.Length > 0 ? Art.Note : Color.FromArgb(230, 247, 236), Color.Transparent);
+            Color signal = active || notice.Length > 0 ? skin.Accent : skin.Success;
+            Art.Box(g, 157, 53, pill, 24, 12, active || notice.Length > 0 ? skin.Note : skin.SuccessFill, Color.Transparent);
             Art.Dot(g, signal, 167, 62, 6);
             Art.Label(g, state, 177, 53, pill-26, 24, 12, signal, true, StringAlignment.Center);
 
-            Art.Box(g, 24, 104, 210, 36, 18, Art.Rail, Art.Line);
+            Art.Box(g, 24, 104, 210, 36, 18, skin.Rail, skin.Line);
             string format = videoMode ? (useMicrophone ? "MP4 · 麦克风已开启" : "MP4 · 麦克风已关闭") : "PNG · 支持标注";
-            Art.Label(g, notice.Length > 0 ? notice : format, 242, 104, 387, 36, 12.5f,
-                      notice.Length > 0 ? Art.Berry : Art.Muted, false, StringAlignment.Far);
+            Art.Label(g, notice.Length > 0 ? notice : format, 242, 104, 290, 36, 12.5f,
+                      notice.Length > 0 ? skin.Accent : skin.Muted, false, StringAlignment.Far);
 
-            Art.Box(g, 24, 151, 608, videoMode ? 145 : 185, 16, Color.White, Art.Line);
-            Art.Label(g, "捕获范围", 40, videoMode ? 154 : 160, 155, 29, 16, Art.Ink, true, StringAlignment.Near);
-            using (Pen rule = new Pen(Art.Line))
+            Art.Box(g, 24, 151, 608, videoMode ? 145 : 185, 16, Color.White, skin.Line);
+            Art.Label(g, "捕获范围", 40, videoMode ? 154 : 160, 155, 29, 16, skin.Ink, true, StringAlignment.Near);
+            using (Pen rule = new Pen(skin.Line))
                 g.DrawLine(rule, 42, videoMode ? 247 : 281, 614, videoMode ? 247 : 281);
 
             if (videoMode)
             {
-                Art.Box(g, 24, 307, 608, 122, 16, Color.White, Art.Line);
-                Art.Label(g, "录屏完成后", 40, 310, 180, 29, 16, Art.Ink, true, StringAlignment.Near);
-                Art.Icon(g, useAttachment && clipState.Length == 0 ? "clip" : "clipboard", 28, 503, 18, Art.Muted);
+                Art.Box(g, 24, 307, 608, 122, 16, Color.White, skin.Line);
+                Art.Label(g, "录屏完成后", 40, 310, 180, 29, 16, skin.Ink, true, StringAlignment.Near);
+                Art.Icon(g, useAttachment && clipState.Length == 0 ? "clip" : "clipboard", 28, 503, 18, skin.Muted);
                 string message = clipState.Length > 0 ? clipState :
                     (useAttachment ? "停止录屏后，按 Ctrl + V 粘贴 MP4 附件。" : "停止录屏后，在支持的应用中按 Ctrl + V 粘贴。");
-                Art.Label(g, message, 52, 496, retry.Visible ? 468 : 564, 31, 12.5f, Art.Muted, false, StringAlignment.Near);
+                Art.Label(g, message, 52, 496, retry.Visible ? 468 : 564, 31, 12.5f, skin.Muted, false, StringAlignment.Near);
             }
             else
             {
-                Art.Box(g, 24, 421, 608, 86, 16, Art.Note, Color.FromArgb(228, 210, 171));
-                Art.Box(g, 40, 445, 38, 38, 12, Color.FromArgb(255, 253, 242), Color.Transparent);
-                Art.Icon(g, "clipboard", 48, 453, 22, Color.FromArgb(127, 83, 46));
-                Art.Label(g, "剪贴板", 90, 436, 152, 26, 15, Art.Ink, true, StringAlignment.Near);
+                Art.Box(g, 24, 421, 608, 86, 16, skin.Note, skin.NoteLine);
+                Art.Box(g, 40, 445, 38, 38, 12, Color.FromArgb(205, Color.White), Color.Transparent);
+                Art.Icon(g, "clipboard", 48, 453, 22, skin.NoteInk);
+                Art.Label(g, "剪贴板", 90, 436, 152, 26, 15, skin.Ink, true, StringAlignment.Near);
                 string message = clipState.Length > 0 ? clipState : (scrollPhoto ?
                     "框选后可以向上或向下滚动，完成后标注并复制长图。" : "完成标注后按 Enter 复制，再到需要的位置按 Ctrl + V 粘贴。");
-                Art.Label(g, message, 90, 465, retry.Visible ? 431 : 524, 25, 13, Art.Muted, false, StringAlignment.Near);
+                Art.Label(g, message, 90, 465, retry.Visible ? 431 : 524, 25, 13, skin.Muted, false, StringAlignment.Near);
             }
         }
 
@@ -404,6 +459,7 @@ namespace ScreenStudio
             if (videoMode != video)
             {
                 videoMode = video;
+                retry.Surface = video ? StudioSkin.Current.Paper : StudioSkin.Current.Note;
                 Arrange();
             }
             RefreshState();
@@ -447,6 +503,7 @@ namespace ScreenStudio
         private void RunMode(bool video)
         {
             if (closing || exitRequested) return;
+            if (skinMenu.Visible) skinMenu.Close();
             tray.Dismiss();
             if (trayMenu.Visible) trayMenu.Close();
             if (video && (recorder != null || changingRecording))
@@ -878,7 +935,7 @@ namespace ScreenStudio
                 if (trayMenu != null) trayMenu.Dispose();
                 if (pendingImage != null) pendingImage.Dispose();
                 if (appIcon != null) appIcon.Dispose();
-                if (cameraSticker != null) cameraSticker.Dispose();
+                if (skinMenu != null) skinMenu.Dispose();
             }
             base.Dispose(disposing);
         }

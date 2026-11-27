@@ -7,7 +7,7 @@ using System.Windows.Forms;
 [assembly: AssemblyTitle("取景台")]
 [assembly: AssemblyProduct("取景台")]
 [assembly: AssemblyDescription("Windows 桌面截图、标注与录屏")]
-[assembly: AssemblyVersion("1.12.0.0")]
+[assembly: AssemblyVersion("1.13.0.0")]
 
 namespace ScreenStudio
 {

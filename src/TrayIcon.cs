@@ -36,15 +36,22 @@ namespace ScreenStudio
             AutoScaleMode = AutoScaleMode.None;
             ShowInTaskbar = false;
             TopMost = true;
-            BackColor = Art.Berry;
             Padding = new Padding(1);
             exit = new Button { Text = "退出取景台", Dock = DockStyle.Fill, TabStop = false, Cursor = Cursors.Hand,
-                BackColor = Art.Blush, ForeColor = Art.Berry, FlatStyle = FlatStyle.Flat, UseVisualStyleBackColor = false };
+                FlatStyle = FlatStyle.Flat, UseVisualStyleBackColor = false };
             exit.FlatAppearance.BorderSize = 0;
-            exit.FlatAppearance.MouseOverBackColor = Art.Pink;
             exit.Click += delegate { Dismiss(); quit(); };
             Controls.Add(exit);
+            ApplySkin();
             timer.Tick += Tick;
+        }
+
+        internal void ApplySkin()
+        {
+            StudioSkin skin = StudioSkin.Current;
+            BackColor = exit.ForeColor = skin.Accent;
+            exit.BackColor = skin.Tint;
+            exit.FlatAppearance.MouseOverBackColor = skin.PrimaryFill;
         }
 
         internal void Start(string initialStatus)

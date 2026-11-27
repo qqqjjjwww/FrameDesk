@@ -8,21 +8,6 @@ namespace ScreenStudio
 {
     internal static class Art
     {
-        internal static readonly Color Paper = Color.FromArgb(255, 250, 246);
-        internal static readonly Color Ink = Color.FromArgb(60, 44, 62);
-        internal static readonly Color Muted = Color.FromArgb(107, 89, 104);
-        internal static readonly Color Line = Color.FromArgb(226, 209, 215);
-        internal static readonly Color Berry = Color.FromArgb(135, 47, 81);
-        internal static readonly Color Blush = Color.FromArgb(255, 233, 238);
-        internal static readonly Color Pink = Color.FromArgb(255, 175, 195);
-        internal static readonly Color Violet = Color.FromArgb(91, 65, 135);
-        internal static readonly Color Lilac = Color.FromArgb(239, 231, 252);
-        internal static readonly Color Iris = Color.FromArgb(218, 200, 250);
-        internal static readonly Color Rail = Color.FromArgb(244, 236, 238);
-        internal static readonly Color Note = Color.FromArgb(255, 245, 218);
-        internal static readonly Color Mint = Color.FromArgb(182, 234, 205);
-        internal static readonly Color Leaf = Color.FromArgb(39, 101, 77);
-
         internal static void Init(Graphics g, float zoom)
         {
             g.ScaleTransform(zoom, zoom);
@@ -51,40 +36,71 @@ namespace ScreenStudio
             }
         }
 
-        internal static void DrawCover(Graphics g, Image mascot)
+        internal static void DrawCover(Graphics g, Rectangle frame, StudioSkin skin, Image mascot, bool thumbnail)
         {
-            Rectangle frame = new Rectangle(24, 16, 608, 78);
-            using (GraphicsPath shape = Rounded(frame.X, frame.Y, frame.Width, frame.Height, 20))
-            using (var wash = new LinearGradientBrush(frame, Color.FromArgb(255, 229, 225), Color.FromArgb(229, 217, 250), 0f))
-            using (var grid = new Pen(Color.FromArgb(122, 255, 253, 250), 1))
-            using (var border = new Pen(Color.FromArgb(220, 194, 209)))
+            GraphicsState start = g.Save();
+            g.TranslateTransform(frame.X, frame.Y);
+            int w = frame.Width, h = frame.Height;
+            Rectangle bounds = new Rectangle(0, 0, w, h);
+            using (GraphicsPath shape = Rounded(0, 0, w, h, thumbnail ? 8 : 19))
+            using (var wash = new LinearGradientBrush(bounds, skin.CoverStart, skin.CoverEnd, 0f))
+            using (var border = new Pen(skin.Line))
             {
                 g.FillPath(wash, shape);
-                GraphicsState saved = g.Save();
+                GraphicsState inside = g.Save();
                 g.SetClip(shape, CombineMode.Intersect);
-                for (int x = 318; x < frame.Right; x += 14) g.DrawLine(grid, x, frame.Top, x, frame.Bottom);
-                for (int y = 24; y < frame.Bottom; y += 14) g.DrawLine(grid, 318, y, frame.Right, y);
-                // Fade the edge of the graph paper into the title area.
-                using (var fade = new LinearGradientBrush(new Rectangle(317, frame.Top, 78, frame.Height),
-                    Color.FromArgb(243, 223, 238), Color.FromArgb(0, 243, 223, 238), 0f))
-                    g.FillRectangle(fade, 318, frame.Top, 76, frame.Height);
-                g.Restore(saved);
+                int left = thumbnail ? 0 : w / 2;
+                if (skin == StudioSkin.Strawberry)
+                {
+                    int step = thumbnail ? 9 : 15;
+                    using (var ribbon = new SolidBrush(Color.FromArgb(42, skin.Pattern)))
+                    {
+                        for (int x = left; x < w; x += step) g.FillRectangle(ribbon, x, 0, step/3, h);
+                        for (int y = 4; y < h; y += step) g.FillRectangle(ribbon, left, y, w-left, step/3);
+                    }
+                }
+                else
+                {
+                    int wave = thumbnail ? 21 : 51;
+                    float amplitude = thumbnail ? 4 : 9;
+                    using (var ripple = new Pen(Color.FromArgb(115, Color.White), thumbnail ? 1.4f : 2.8f))
+                        for (int y = h/3; y < h+12; y += thumbnail ? 10 : 16)
+                            for (int x = left; x < w; x += wave)
+                                g.DrawBezier(ripple, x,y, x+wave*.4f,y-amplitude, x+wave*.6f,y+amplitude, x+wave,y);
+                }
+                if (!thumbnail)
+                {
+                    // Continue the underlying gradient at the edge of the pattern.
+                    Rectangle fadeBounds = new Rectangle(left-1, 0, 95, h);
+                    Color blend = Color.FromArgb((skin.CoverStart.R+skin.CoverEnd.R)/2,
+                        (skin.CoverStart.G+skin.CoverEnd.G)/2, (skin.CoverStart.B+skin.CoverEnd.B)/2);
+                    using (var fade = new LinearGradientBrush(fadeBounds, blend, Color.FromArgb(0, blend), 0f))
+                        g.FillRectangle(fade, left, 0, fadeBounds.Width-2, h);
+                    Spark(g, w*.68f, h*.32f, 6, Color.FromArgb(255, 226, 142), skin.NoteInk);
+                    Spark(g, w*.922f, h*.72f, 4, Color.White, skin.Pattern);
+                    if (skin == StudioSkin.SeaSalt)
+                    {
+                        using (var bubble = new Pen(Color.FromArgb(180, skin.Pattern), 1.2f))
+                        {
+                            g.DrawEllipse(bubble, w*.71f, h*.68f, 7, 7);
+                            g.DrawEllipse(bubble, w*.91f, h*.18f, 10, 10);
+                        }
+                    }
+                    else Dot(g, skin.Pattern, w*.71f, h*.69f, 4);
+                }
+                if (mascot != null)
+                {
+                    float scale = Math.Min((thumbnail ? w-6 : 125f) / mascot.Width, (h-4f) / mascot.Height);
+                    float width = mascot.Width * scale, height = mascot.Height * scale;
+                    float center = thumbnail ? w/2f : w*.806f;
+                    g.InterpolationMode = InterpolationMode.HighQualityBicubic;
+                    g.PixelOffsetMode = PixelOffsetMode.HighQuality;
+                    g.DrawImage(mascot, new RectangleF(center-width/2, (h-height)/2, width, height));
+                }
+                g.Restore(inside);
                 g.DrawPath(border, shape);
             }
-            Spark(g, 434, 41, 6, Color.FromArgb(255, 212, 114), Color.FromArgb(153, 111, 77));
-            Spark(g, 582, 69, 5, Color.White, Color.FromArgb(165, 131, 183));
-            Dot(g, Color.FromArgb(227, 143, 164), 452, 72, 4);
-            Dot(g, Color.FromArgb(255, 250, 228), 572, 32, 5);
-            if (mascot != null)
-            {
-                float scale = Math.Min(122f / mascot.Width, (frame.Height - 4f) / mascot.Height);
-                float w = mascot.Width * scale, h = mascot.Height * scale;
-                GraphicsState saved = g.Save();
-                g.InterpolationMode = InterpolationMode.HighQualityBicubic;
-                g.PixelOffsetMode = PixelOffsetMode.HighQuality;
-                g.DrawImage(mascot, new RectangleF(512 - w / 2, frame.Top + (frame.Height - h) / 2, w, h));
-                g.Restore(saved);
-            }
+            g.Restore(start);
         }
 
         private static void Spark(Graphics g, float x, float y, float r, Color fill, Color outline)
@@ -126,6 +142,18 @@ namespace ScreenStudio
                 pen.LineJoin = LineJoin.Round;
                 switch (kind)
                 {
+                    case "palette":
+                        using (var contour = new GraphicsPath())
+                        {
+                            contour.AddBezier(20, 14, 16, 17, 13, 10, 12, 15);
+                            contour.AddBezier(12, 15, 11, 17, 16, 19, 13, 21);
+                            contour.AddBezier(13, 21, 6, 23, 1, 16, 3, 10);
+                            contour.AddBezier(3, 10, 5, 3, 14, 1, 19, 6);
+                            contour.AddBezier(19, 6, 22, 9, 23, 12, 20, 14);
+                            g.DrawPath(pen, contour);
+                        }
+                        Dot(g, color, 6, 10, 2.6f); Dot(g, color, 10, 6, 2.6f); Dot(g, color, 15, 7, 2.6f);
+                        break;
                     case "move":
                         g.DrawLine(pen, 3, 12, 21, 12);
                         g.DrawLine(pen, 12, 3, 12, 21);
@@ -179,7 +207,7 @@ namespace ScreenStudio
                         break;
                     case "clipboard":
                         Box(g, 4, 4.5f, 16, 17, 3, Color.Transparent, color, 1.7f);
-                        Box(g, 8.5f, 2.5f, 7, 4.2f, 2, Note, color, 1.5f);
+                        Box(g, 8.5f, 2.5f, 7, 4.2f, 2, StudioSkin.Current.Note, color, 1.5f);
                         g.DrawLine(pen, 8, 11, 16, 11);
                         g.DrawLine(pen, 8, 15, 13, 15);
                         break;
@@ -212,13 +240,13 @@ namespace ScreenStudio
         }
     }
 
-    internal enum ButtonKind { Tab, Scope, Switch, Primary, Link }
+    internal enum ButtonKind { Tab, Scope, Switch, Primary, Link, Skin }
 
     internal sealed class StudioButton : Button
     {
         internal ButtonKind Kind;
         internal string Glyph = "", Detail = "";
-        internal Color Surface = Art.Paper;
+        internal Color Surface = StudioSkin.Current.Paper;
         internal bool Selected;
         internal float Zoom = 1;
         private bool hover, armed;
@@ -242,31 +270,40 @@ namespace ScreenStudio
         protected override void OnPaint(PaintEventArgs e)
         {
             Graphics g = e.Graphics;
+            StudioSkin skin = StudioSkin.Current;
             g.Clear(Surface);
             Art.Init(g, Zoom);
             float w = Width / Zoom, h = Height / Zoom;
             bool video = Glyph == "video";
-            Color accent = video ? Art.Violet : Art.Berry;
-            Color tint = video ? Art.Lilac : Art.Blush;
-            if (Kind == ButtonKind.Tab)
+            Color accent = video ? skin.Secondary : skin.Accent;
+            Color tint = video ? skin.SecondaryTint : skin.Tint;
+            if (Kind == ButtonKind.Skin)
+            {
+                Art.Box(g, 1, 1, w-2, h-2, h/2, hover || armed ? tint : Color.White, hover ? accent : skin.Line);
+                Art.Icon(g, Glyph, 10, (h-17)/2, 17, accent);
+                Art.Label(g, Text, 31, 0, 33, h, 13.5f, accent, true, StringAlignment.Near);
+                using (var arrow = new Pen(accent, 1.4f))
+                    g.DrawLines(arrow, new[] { new PointF(w-18,h/2-2), new PointF(w-15,h/2+1), new PointF(w-12,h/2-2) });
+            }
+            else if (Kind == ButtonKind.Tab)
             {
                 if (Selected || hover)
                     Art.Box(g, 1, 1, w-2, h-2, (h-2)/2, Selected ? Color.White : tint,
-                            Selected ? Art.Line : Color.Transparent);
-                Color ink = Selected ? accent : Art.Muted;
+                            Selected ? skin.Line : Color.Transparent);
+                Color ink = Selected ? accent : skin.Muted;
                 Art.Icon(g, Glyph, w/2-27, (h-16)/2, 16, ink);
                 Art.Label(g, Text, w/2-6, 0, 44, h, 14, ink, Selected, StringAlignment.Near);
             }
             else if (Kind == ButtonKind.Scope)
             {
-                Color badge = Glyph == "screen" ? Art.Note : (Glyph == "scroll" ? Art.Lilac : Art.Blush);
-                Color ink = Glyph == "screen" ? Color.FromArgb(127, 83, 46) : (Glyph == "scroll" ? Art.Violet : Art.Berry);
+                Color badge = Glyph == "screen" ? skin.Note : (Glyph == "scroll" ? skin.SecondaryTint : skin.Tint);
+                Color ink = Glyph == "screen" ? skin.NoteInk : (Glyph == "scroll" ? skin.Secondary : skin.Accent);
                 Art.Box(g, 1, 1, w-2, h-2, 13, Selected || hover ? badge : Color.White,
-                        Selected || hover ? ink : Art.Line, Selected ? 1.7f : 1);
+                        Selected || hover ? ink : skin.Line, Selected ? 1.7f : 1);
                 Art.Box(g, 12, (h-34)/2, 34, 34, 11, Selected ? Color.White : badge, Color.Transparent);
                 Art.Icon(g, Glyph, 19, (h-20)/2, 20, ink);
-                Art.Label(g, Text, 53, h/2-23, w-78, 23, 15.5f, Art.Ink, true, StringAlignment.Near);
-                Art.Label(g, Detail, 53, h/2+1, w-58, 20, 12.5f, Art.Muted, false, StringAlignment.Near);
+                Art.Label(g, Text, 53, h/2-23, w-78, 23, 15.5f, skin.Ink, true, StringAlignment.Near);
+                Art.Label(g, Detail, 53, h/2+1, w-58, 20, 12.5f, skin.Muted, false, StringAlignment.Near);
                 if (Selected)
                 {
                     Art.Dot(g, ink, w-24, 10, 14);
@@ -275,34 +312,34 @@ namespace ScreenStudio
             }
             else if (Kind == ButtonKind.Switch)
             {
-                if (hover) Art.Box(g, 1, 1, w-2, h-2, 9, Art.Paper, Color.Transparent);
-                Art.Icon(g, Glyph, 5, (h-17)/2, 17, Art.Muted);
-                Art.Label(g, Text, 28, 0, w-78, h, 13.5f, Art.Ink, false, StringAlignment.Near);
-                Art.Box(g, w-41, (h-20)/2, 37, 20, 10, Selected ? Art.Berry : Color.FromArgb(191, 178, 189), Color.Transparent);
+                if (hover) Art.Box(g, 1, 1, w-2, h-2, 9, skin.Paper, Color.Transparent);
+                Art.Icon(g, Glyph, 5, (h-17)/2, 17, skin.Muted);
+                Art.Label(g, Text, 28, 0, w-78, h, 13.5f, skin.Ink, false, StringAlignment.Near);
+                Art.Box(g, w-41, (h-20)/2, 37, 20, 10, Selected ? skin.Accent : skin.OffTrack, Color.Transparent);
                 Art.Dot(g, Color.White, w-(Selected ? 22 : 38), (h-15)/2, 15);
-                if (Selected) Art.Icon(g, "check", w-21, (h-13)/2, 13, Art.Berry);
+                if (Selected) Art.Icon(g, "check", w-21, (h-13)/2, 13, skin.Accent);
             }
             else if (Kind == ButtonKind.Primary)
             {
                 float top = armed ? 3 : 1, mid = (h-4)/2 + top;
-                Color fill = video ? Art.Iris : Art.Pink;
+                Color fill = video ? skin.SecondaryFill : skin.PrimaryFill;
                 if (hover) fill = ControlPaint.Light(fill, .18f);
                 Art.Box(g, 1, 4, w-2, h-5, 15, accent, Color.Transparent);
                 Art.Box(g, 1, top, w-2, h-5, 15, fill, accent, 1.5f);
                 Art.Box(g, 15, mid-16, 32, 32, 11, tint, Color.Transparent);
-                Art.Icon(g, Glyph, 21, mid-10, 20, Art.Ink);
-                Art.Label(g, Text, 57, mid-19, w-203, 38, 17.5f, Art.Ink, true, StringAlignment.Near);
+                Art.Icon(g, Glyph, 21, mid-10, 20, skin.Ink);
+                Art.Label(g, Text, 57, mid-19, w-203, 38, 17.5f, skin.Ink, true, StringAlignment.Near);
                 float hintWidth = video ? 112 : (Detail == "F1" ? 50 : 85);
                 Art.Box(g, w-15-hintWidth, mid-13, hintWidth, 26, 8, tint, Color.Transparent);
                 Art.Label(g, Detail, w-15-hintWidth, mid-13, hintWidth, 26, 12, accent, true, StringAlignment.Center);
             }
             else
             {
-                Art.Box(g, 1, 1, w-2, h-2, 8, hover ? Art.Blush : Color.White, Art.Line);
+                Art.Box(g, 1, 1, w-2, h-2, 8, hover ? skin.Tint : Color.White, skin.Line);
                 Art.Label(g, Text, 0, 0, w, h, 13, accent, true, StringAlignment.Center);
             }
             if (Focused && ShowFocusCues)
-                using (Pen p = new Pen(Art.Ink))
+                using (Pen p = new Pen(skin.Ink))
                 {
                     p.DashStyle = DashStyle.Dot;
                     g.DrawRectangle(p, 4, 4, w - 8, h - 8);
@@ -334,18 +371,19 @@ namespace ScreenStudio
         protected override void OnPaint(PaintEventArgs e)
         {
             Graphics g = e.Graphics;
+            StudioSkin skin = StudioSkin.Current;
             g.Clear(BackColor);
             Art.Init(g, Zoom);
             float w = Width / Zoom, h = Height / Zoom;
             if (Checked || hover)
-                Art.Box(g, 1, 1, w-2, h-2, 8, Checked ? Art.Lilac : Art.Paper, Color.Transparent);
-            using (var edge = new Pen(Checked ? Art.Violet : Art.Muted, 1.4f))
+                Art.Box(g, 1, 1, w-2, h-2, 8, Checked ? skin.SecondaryTint : skin.Paper, Color.Transparent);
+            using (var edge = new Pen(Checked ? skin.Secondary : skin.Muted, 1.4f))
                 g.DrawEllipse(edge, 11, (h-14)/2, 14, 14);
-            if (Checked) Art.Dot(g, Art.Violet, 14.5f, (h-7)/2, 7);
-            Art.Label(g, Text, 34, 0, 119, h, 14.5f, Art.Ink, Checked, StringAlignment.Near);
-            Art.Label(g, detail, 156, 0, w-161, h, 12.5f, Art.Muted, false, StringAlignment.Near);
+            if (Checked) Art.Dot(g, skin.Secondary, 14.5f, (h-7)/2, 7);
+            Art.Label(g, Text, 34, 0, 119, h, 14.5f, skin.Ink, Checked, StringAlignment.Near);
+            Art.Label(g, detail, 156, 0, w-161, h, 12.5f, skin.Muted, false, StringAlignment.Near);
             if (Focused && ShowFocusCues)
-                using (var focus = new Pen(Art.Violet) { DashStyle = DashStyle.Dot })
+                using (var focus = new Pen(skin.Secondary) { DashStyle = DashStyle.Dot })
                     g.DrawRectangle(focus, 3, 3, w-6, h-6);
         }
     }

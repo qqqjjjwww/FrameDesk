@@ -4,10 +4,13 @@
 
 ## 下载运行
 
-适用于 64 位 Windows 10（1607 或更高版本）和 Windows 11。下载后双击 `FrameDesk-1.12.0-win-x64.exe` 即可运行。[下载取景台 1.12.0（Windows 64 位）](https://github.com/qqqjjjwww/FrameDesk/releases/download/v1.12.0/FrameDesk-1.12.0-win-x64.exe)
+适用于 64 位 Windows 10（1607 或更高版本）和 Windows 11。下载后双击 `FrameDesk-1.13.0-win-x64.exe` 即可运行。[下载取景台 1.13.0（Windows 64 位）](https://github.com/qqqjjjwww/FrameDesk/releases/download/v1.13.0/FrameDesk-1.13.0-win-x64.exe)
+
+![取景台的两套皮肤，左侧是草莓奶油，右侧是薄荷海盐](https://github.com/qqqjjjwww/FrameDesk/releases/download/v1.13.0/FrameDesk-1.13.0-skins.png)
 
 | 操作 | 用法 |
 | --- | --- |
+| 更换皮肤 | 点主窗口右上方的「皮肤」，选择「草莓奶油」或「薄荷海盐」。选择会立即生效，下次启动会沿用。 |
 | 收起主窗口 | 点击 **×** 收起到任务栏右下角，**F1**、**F2** 继续可用。空闲时单击相机图标可重新打开。如果没看到图标，点时钟旁的 **∧**。 |
 | 退出取景台 | 把鼠标停在相机图标上，再点击「退出取景台」。录屏时，按钮会显示「结束录屏并退出」，点击后会先把视频复制到剪贴板。 |
 | 框选截图 | 按 **F1**，拖动鼠标框选。松开后，标注窗口会出现在截图所在的屏幕上。 |

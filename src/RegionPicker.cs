@@ -8,8 +8,6 @@ namespace ScreenStudio
 {
     public sealed class RegionPicker : Form
     {
-        private static readonly Color Accent = Art.Pink;
-        private static readonly Color LabelFill = Art.Ink;
         private readonly Rectangle desktop;
         private readonly Bitmap snapshot;
         private readonly Rectangle hintMonitor;
@@ -194,7 +192,7 @@ namespace ScreenStudio
 
             Rectangle clear = Rectangle.Intersect(visible, selection);
             if (clear.Width > 0 && clear.Height > 0) g.DrawImage(snapshot, clear, clear, GraphicsUnit.Pixel);
-            using (Pen outline = new Pen(Accent, Math.Max(1, (int)Math.Round(2 * scale))))
+            using (Pen outline = new Pen(StudioSkin.Current.PrimaryFill, Math.Max(1, (int)Math.Round(2 * scale))))
             {
                 outline.Alignment = PenAlignment.Inset;
                 g.DrawRectangle(outline, selection.X, selection.Y, selection.Width - 1, selection.Height - 1);
@@ -221,8 +219,8 @@ namespace ScreenStudio
                 x = Math.Max(monitor.Left + gap, Math.Min(monitor.Right - width - gap, x));
                 y = Math.Max(monitor.Top + gap, Math.Min(monitor.Bottom - height - gap, y));
                 Rectangle box = new Rectangle(x, y, width, height);
-                using (SolidBrush fill = new SolidBrush(LabelFill)) g.FillRectangle(fill, box);
-                using (SolidBrush accent = new SolidBrush(Accent)) g.FillRectangle(accent, box.X, box.Y, Math.Max(2, (int)(3 * scale)), box.Height);
+                using (SolidBrush fill = new SolidBrush(StudioSkin.Current.Ink)) g.FillRectangle(fill, box);
+                using (SolidBrush accent = new SolidBrush(StudioSkin.Current.PrimaryFill)) g.FillRectangle(accent, box.X, box.Y, Math.Max(2, (int)(3 * scale)), box.Height);
                 TextRenderer.DrawText(g, text, font, box, Color.White, flags);
             }
         }
